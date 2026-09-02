@@ -1,0 +1,110 @@
+// scanner/run.ts — 每日流程。純唯讀：只讀鏈、只讀 REST、只寫本機 SQLite、只推 Telegram（SPEC §10）
+import 'dotenv/config'
+import { openDb, getMeta, setMeta } from '../db/index.js'
+import { ADDR, CHAIN, loadScoring } from '../config/chain.js'
+import { ApiUsage } from './sources/usage.js'
+import { makeRpc } from './sources/rpc.js'
+import { fetchAssets, fetchCorporateActions, fetchPrice, type RhQuote } from './sources/robinhood.js'
+import { fetchTokenPairs } from './sources/dexscreener.js'
+import { discoverUsdgPools, fetchSwaps } from './sources/uniswapV4.js'
+import { aggregateHourly } from './metrics/hourly.js'
+import { ageDays, vol7, priceDevPct } from './metrics/derived.js'
+import { hardExclusions } from './metrics/exclusions.js'
+import { formatDailySummary } from './notify/summary.js'
+import { sendTelegram } from './notify/telegram.js'
+import { taipeiDate, isUsWeekday } from './time.js'
+import { upsertTokens, upsertPools, writeHourly, writeSnapshot, previousCandidates, recentVolumes, pruneHourly, isStockUsdgPool } from './steps.js'
+
+const WEEKDAY_ZH = ['日', '一', '二', '三', '四', '五', '六']
+const STOCKISH = /^[A-Z]{1,5}$/
+const log = (m: string) => console.log(`[${new Date().toISOString()}] ${m}`)
+
+export async function runDaily(opts: { dbPath?: string; now?: Date } = {}) {
+  const now = opts.now ?? new Date(); const date = taipeiDate(now); const usage = new ApiUsage()
+  const db = openDb(opts.dbPath ?? 'db/lp.sqlite'); const scoring = loadScoring()
+  const runId = Number(db.prepare(`INSERT INTO scan_runs(started_at) VALUES (?)`).run(now.toISOString()).lastInsertRowid)
+  let poolsScanned = 0
+  try {
+    const rpc = makeRpc({ usage })
+    // 1. 白名單與公司行動
+    const assets = await fetchAssets({ usage }); upsertTokens(db, assets, now.toISOString()); log(`assets ${assets.length}`)
+    const stockByAddr = new Map(assets.map(a => [a.address, a])); const stockSet = new Set(stockByAddr.keys())
+    const cas = await fetchCorporateActions({ usage })
+    const caSt = db.prepare(`INSERT OR REPLACE INTO corporate_actions(id,token,type,status,effective_at,pending_multiplier,raw) VALUES (?,?,?,?,?,?,?)`)
+    for (const c of cas) caSt.run(c.id, c.address, c.type, c.status, c.effectiveAt, stockByAddr.get(c.address)?.pendingMultiplier ?? '', JSON.stringify(c.raw))
+    log(`corporate actions ${cas.length}`)
+    // 2. 池子發現（增量）
+    const latest = await rpc.getBlockNumber()
+    const lastDisc = getMeta(db, 'last_discovery_block')
+    const from = lastDisc ? BigInt(lastDisc) + 1n : latest - BigInt(30 * CHAIN.blocksPerDay)
+    if (!lastDisc) log('尚未 backfill，只掃最近 30 天的 Initialize；請跑 pnpm backfill 補齊')
+    const found = await discoverUsdgPools(rpc, from, latest)
+    const blockTs = new Map<string, string>()
+    for (const p of found) if (isStockUsdgPool(p, stockSet) && !blockTs.has(p.createdBlock.toString()))
+      blockTs.set(p.createdBlock.toString(), new Date(Number((await rpc.call(() => rpc.client.getBlock({ blockNumber: p.createdBlock }))).timestamp) * 1000).toISOString())
+    log(`discovery ${from}→${latest}: ${found.length} usdg pools, ${upsertPools(db, found, stockSet, blockTs)} new stock pools`)
+    setMeta(db, 'last_discovery_block', latest.toString())
+    // 3. TVL（DexScreener）與參考價（Robinhood）
+    const pools = db.prepare('SELECT * FROM pools').all() as any[]
+    const stockAddrsWithPools = [...new Set<string>(pools.map(p => p.stock_is_token0 ? p.token0 : p.token1))]
+    const tvlByPool = new Map<string, number | null>(); const quoteBySymbol = new Map<string, RhQuote | null>()
+    for (const addr of stockAddrsWithPools) {
+      try { for (const pair of await fetchTokenPairs({ usage }, addr)) tvlByPool.set(pair.pairId, pair.liquidityUsd) } catch (e) { log(`dexscreener ${addr}: ${(e as Error).message}`) }
+      const sym = stockByAddr.get(addr)?.tokenSymbol
+      if (sym && !quoteBySymbol.has(sym)) { try { quoteBySymbol.set(sym, await fetchPrice({ usage }, sym)) } catch (e) { quoteBySymbol.set(sym, null); log(`price ${sym}: ${(e as Error).message}`) } }
+    }
+    log(`tvl for ${tvlByPool.size} pairs, quotes ${quoteBySymbol.size}`)
+    // 4. 每池：Swap → hourly → snapshot
+    const dayFrom = latest - BigInt(CHAIN.blocksPerDay)
+    const tsFrom = Number((await rpc.call(() => rpc.client.getBlock({ blockNumber: dayFrom }))).timestamp)
+    const tsTo = Number((await rpc.call(() => rpc.client.getBlock({ blockNumber: latest }))).timestamp)
+    const interp = (b: bigint) => tsFrom + Number(b - dayFrom) * (tsTo - tsFrom) / Number(latest - dayFrom)   // DECISIONS D12
+    const nextCa = db.prepare(`SELECT MIN(effective_at) e FROM corporate_actions WHERE token=? AND effective_at>=?`)
+    for (const p of pools) {
+      poolsScanned++
+      const stockAddr: string = p.stock_is_token0 ? p.token0 : p.token1; const asset = stockByAddr.get(stockAddr)
+      const feeOk = p.fee_ppm !== null && p.fee_ppm >= scoring.exclusions.fee_ppm_min && p.fee_ppm <= scoring.exclusions.fee_ppm_max
+      const worth = p.hooks === ADDR.zero && feeOk
+      const hourly = worth ? aggregateHourly(await fetchSwaps(rpc, p.pool_id, dayFrom, latest), interp, !!p.stock_is_token0, tsFrom, tsTo) : []
+      if (hourly.length) writeHourly(db, p.pool_id, hourly)
+      const volume = hourly.reduce((a, r) => a + r.volumeUsd, 0), fees = hourly.reduce((a, r) => a + r.feesUsd, 0), swaps = hourly.reduce((a, r) => a + r.swapCount, 0)
+      const lastPrice = [...hourly].reverse().find(r => r.priceUsd !== null)?.priceUsd ?? null
+      const tvl = tvlByPool.get(p.pool_id) ?? null
+      const quote = asset ? quoteBySymbol.get(asset.tokenSymbol) ?? null : null
+      const age = p.created_at ? ageDays(p.created_at, date) : null
+      const v7 = vol7([...recentVolumes(db, p.pool_id, date), volume])
+      const caRow = asset ? (nextCa.get(stockAddr, date) as { e: string | null })?.e : null
+      const caDays = caRow ? ageDays(date, caRow) : null
+      const flags = hardExclusions({ stockAddress: asset ? stockAddr : null, otherIsUsdg: true, symbolLooksLikeStock: STOCKISH.test(asset?.tokenSymbol ?? ''), hooks: p.hooks, feePpm: p.fee_ppm,
+        ageDays: age, tvlUsd: tvl, pendingMultiplier: asset?.pendingMultiplier ?? '', corpActionDaysAhead: caDays, isTradingHalt: quote?.isTradingHalt ?? null,
+        rhStatus: asset?.status ?? null, wash: null, quoteKind: 'usdg' }, scoring.exclusions)
+      if (v7.shortHistory) flags.push('short_history')
+      writeSnapshot(db, { pool_id: p.pool_id, date, is_weekday: isUsWeekday(now) ? 1 : 0, tvl_usd: tvl, volume_24h_usd: volume, fees_24h_usd: fees, price_usd: lastPrice,
+        price_ref_usd: quote?.mid ?? null, price_dev_pct: lastPrice !== null ? priceDevPct(lastPrice, quote?.mid ?? null, Number(asset?.currentMultiplier ?? 1)) : null,
+        swap_count: swaps, age_days: age, vol7_avg_usd: v7.avg, vol7_cv: v7.cv, raw_apr: tvl && tvl > 0 ? fees * 365 / tvl : null,
+        flags, excluded: flags.some(f => f !== 'short_history') ? 1 : 0 })
+      if (poolsScanned % 25 === 0) log(`pools ${poolsScanned}/${pools.length} (calls ${JSON.stringify(usage.toJSON())})`)
+    }
+    // 5. 摘要
+    const today = db.prepare(`SELECT s.*, p.fee_ppm, t.symbol FROM pool_snapshots s JOIN pools p ON p.pool_id=s.pool_id
+      JOIN tokens t ON t.address = CASE WHEN p.stock_is_token0=1 THEN p.token0 ELSE p.token1 END WHERE s.date=?`).all(date) as any[]
+    const cands = today.filter(r => !r.excluded).sort((a, b) => (b.raw_apr ?? 0) - (a.raw_apr ?? 0))
+    const prev = previousCandidates(db, date); const cur = new Set(cands.map(c => c.pool_id))
+    const label = (r: any) => `${r.symbol}/USDG v4`
+    const changes = [...today.filter(r => prev.has(r.pool_id) && !cur.has(r.pool_id)).map(r => ({ label: label(r), kind: 'dropped' as const, reason: JSON.parse(r.flags).join(',') })),
+                     ...cands.filter(r => !prev.has(r.pool_id) && prev.size > 0).map(r => ({ label: label(r), kind: 'added' as const }))]
+    const text = formatDailySummary({ date, weekdayZh: WEEKDAY_ZH[new Date(date + 'T00:00:00+08:00').getDay()], poolsScanned, candidates: cands.length,
+      top: cands.slice(0, 5).map(r => ({ label: label(r), feePct: (r.fee_ppm / 1e4).toFixed(2) + '%', rawApr: r.raw_apr ?? 0, tvlUsd: r.tvl_usd ?? 0, traderCount: r.trader_count })), changes, positions: [] })
+    console.log('\n' + text + '\n')
+    const sent = await sendTelegram(text, { token: process.env.TELEGRAM_BOT_TOKEN, chatId: process.env.TELEGRAM_CHAT_ID })
+    pruneHourly(db)
+    db.prepare(`UPDATE scan_runs SET finished_at=?, ok=1, pools_scanned=?, api_calls=?, error=? WHERE id=?`)
+      .run(new Date().toISOString(), poolsScanned, JSON.stringify(usage.toJSON()), sent === 'not_configured' ? 'telegram_not_configured' : null, runId)
+    log(`done. telegram=${sent} api_calls=${JSON.stringify(usage.toJSON())}`)
+  } catch (e) {
+    db.prepare(`UPDATE scan_runs SET finished_at=?, ok=0, pools_scanned=?, api_calls=?, error=? WHERE id=?`).run(new Date().toISOString(), poolsScanned, JSON.stringify(usage.toJSON()), String((e as Error).stack ?? e), runId)
+    throw e
+  } finally { db.close() }
+}
+const isMain = process.argv[1] && import.meta.url.endsWith(process.argv[1].split('/').pop()!)
+if (isMain) runDaily().catch(e => { console.error(e); process.exit(1) })
