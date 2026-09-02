@@ -202,6 +202,11 @@ LP 地址數: 9，同時也在交易的 LP: 4  ⚠️
 | D8 | v3 / v2 池 | v3 Factory `PoolCreated` 與 v2 `PairCreated` 一併掃，`pools.protocol` 區分；v2 沒有區間，`sim` 存 NULL、不進排名（僅顯示）。 |
 | D9 | DexScreener | 免 key、無需 env；只做 TVL/量的**交叉驗證與池子補漏**，主數據仍是鏈上自算，避免對第三方免費 API 的隱性依賴。 |
 | D10 | Blockscout | 只用 `api.blockscout.com/4663`（需免費 key）做人工核對工具，不進每日排程。 |
+| D11 | 手續費估算（P1） | `fees_usd = USDG 側成交量 × fee / 1e6`。輸入端是股票時真實費用以股票計，換算差異僅為該筆的價格衝擊，可忽略。v4 Swap 事件的 `fee` 欄位即該筆適用的 LP 費率。 |
+| D12 | Swap 時間戳 | 每日區間的首尾兩塊取真實時間戳，中間依區塊號線性內插（0.104 s/塊 → 誤差 < 1 分鐘），省下每筆 `getBlock`。 |
+| D13 | 股票在哪一邊 | v4 依地址排序決定 currency0/1，實測最大的 SOFI/USDG 池 USDG 是 currency0（USDG `0x5fc5…` < SOFI `0x98e7…`）。`pools.stock_is_token0` 記錄；`price_usd` 一律為「股票 / USDG」，與 SPEC §6「token0 以 USD 計價」不同。 |
+| D14 | P1 摘要排序 | 尚無 §7 模擬，Top 5 依 `raw_apr = fees_24h × 365 / tvl` 排序，摘要內明示「原始 APR」。 |
+| D15 | 池子發現只掃 v4 | v3 / v2 Factory 地址已記錄（11.4），但實測 DexScreener 上 SOFI 的 29 個池全是 v4，第一版不掃 v3/v2；`pools.protocol` 欄位保留。 |
 
 ---
 
