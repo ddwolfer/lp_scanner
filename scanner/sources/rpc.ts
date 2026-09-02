@@ -24,22 +24,25 @@ export interface Rpc {
   getBlockNumber(): Promise<bigint>
   getLogsChunked(p: { address: `0x${string}`; event: AbiEvent; args?: Record<string, unknown> }, from: bigint, to: bigint, chunk?: bigint): Promise<Log[]>
 }
-export function makeRpc(o: { usage: ApiUsage; url?: string; concurrency?: number; source?: string }): Rpc {
+export function makeRpc(o: { usage: ApiUsage; url?: string; concurrency?: number; minGapMs?: number; source?: string }): Rpc {
   const url = o.url ?? CHAIN.publicRpc
   const source = o.source ?? 'rpc'
   const client = createPublicClient({
     chain: { id: CHAIN.id, name: CHAIN.name, nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 }, rpcUrls: { default: { http: [url] } } },
     transport: http(url, { timeout: 60_000, retryCount: 0 }),
   })
-  const lim = new Limiter(o.concurrency ?? 4)
+  const lim = new Limiter(o.concurrency ?? 2)
+  const minGapMs = o.minGapMs ?? 250; let lastStart = 0
   async function call<T>(fn: () => Promise<T>): Promise<T> {
     return lim.run(async () => {
       for (let attempt = 0; ; attempt++) {
+        const wait = lastStart + minGapMs - Date.now(); if (wait > 0) await sleep(wait); lastStart = Date.now()
         o.usage.inc(source)
         try { return await fn() }
         catch (e) {
           const msg = String((e as Error).message ?? e)
-          if (attempt < 5 && /429|Too Many|timeout|timed out|ECONNRESET|fetch failed|503|502/i.test(msg)) { await sleep(500 * 2 ** attempt); continue }
+          // public RPC 對 getLogs 有突發限流（DECISIONS 11.5）；最多 8 次退避，上限 30 秒
+          if (attempt < 8 && /429|Too Many|timeout|timed out|ECONNRESET|fetch failed|503|502/i.test(msg)) { await sleep(Math.min(30_000, 1000 * 2 ** attempt) + Math.random() * 500); continue }
           throw e
         }
       }

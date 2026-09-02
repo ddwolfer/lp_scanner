@@ -68,7 +68,11 @@ export async function runDaily(opts: { dbPath?: string; now?: Date } = {}) {
       // DECISIONS D16：只對無 hooks、費率合理、DexScreener TVL ≥ 門檻的池拉 Swap（其餘必被硬排除）
       const worth = p.hooks === ADDR.zero && feeOk && tvl !== null && tvl >= scoring.scan.swap_fetch_min_tvl_usd
       if (worth) swapPools++
-      const hourly = worth ? aggregateHourly(await fetchSwaps(rpc, p.pool_id, dayFrom, latest), interp, !!p.stock_is_token0, tsFrom, tsTo) : []
+      let hourly: ReturnType<typeof aggregateHourly> = []; let swapFetchFailed = false
+      if (worth) {
+        try { hourly = aggregateHourly(await fetchSwaps(rpc, p.pool_id, dayFrom, latest), interp, !!p.stock_is_token0, tsFrom, tsTo) }
+        catch (e) { swapFetchFailed = true; log(`swaps ${p.pool_id.slice(0, 10)}: ${String((e as Error).message).split('\n')[0]}`) }
+      }
       if (hourly.length) writeHourly(db, p.pool_id, hourly)
       const volume = hourly.reduce((a, r) => a + r.volumeUsd, 0), fees = hourly.reduce((a, r) => a + r.feesUsd, 0), swaps = hourly.reduce((a, r) => a + r.swapCount, 0)
       const lastPrice = [...hourly].reverse().find(r => r.priceUsd !== null)?.priceUsd ?? null
@@ -81,10 +85,11 @@ export async function runDaily(opts: { dbPath?: string; now?: Date } = {}) {
         ageDays: age, tvlUsd: tvl, pendingMultiplier: asset?.pendingMultiplier ?? '', corpActionDaysAhead: caDays, isTradingHalt: quote?.isTradingHalt ?? null,
         rhStatus: asset?.status ?? null, wash: null, quoteKind: 'usdg' }, scoring.exclusions)
       if (v7.shortHistory) flags.push('short_history')
+      if (swapFetchFailed) flags.push('swap_fetch_failed')
       writeSnapshot(db, { pool_id: p.pool_id, date, is_weekday: isUsWeekday(now) ? 1 : 0, tvl_usd: tvl, volume_24h_usd: volume, fees_24h_usd: fees, price_usd: lastPrice,
         price_ref_usd: quote?.mid ?? null, price_dev_pct: lastPrice !== null ? priceDevPct(lastPrice, quote?.mid ?? null, Number(asset?.currentMultiplier ?? 1)) : null,
         swap_count: swaps, age_days: age, vol7_avg_usd: v7.avg, vol7_cv: v7.cv, raw_apr: tvl && tvl > 0 ? fees * 365 / tvl : null,
-        flags, excluded: flags.some(f => f !== 'short_history') ? 1 : 0 })
+        flags, excluded: flags.some(f => f !== 'short_history' && f !== 'swap_fetch_failed') ? 1 : 0 })
       if (poolsScanned % 25 === 0) log(`pools ${poolsScanned}/${pools.length} (calls ${JSON.stringify(usage.toJSON())})`)
     }
     // 5. 摘要
