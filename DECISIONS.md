@@ -188,6 +188,22 @@ LP 地址數: 9，同時也在交易的 LP: 4  ⚠️
 
 ---
 
+### 11.7 補充：backfill 實測（2026-09-03 深夜）
+
+| 項目 | 實測 |
+|---|---|
+| 掃描區塊 | 0 → 52,835,021，2M 塊一段共 27 段 |
+| `eth_getLogs` + `getBlock` 總次數 | **5,365**（public RPC，併發 4，無 429 失敗） |
+| 耗時 | 約 40 分鐘（前段 50 秒/段，最後兩段各 24 分鐘，因近期池子暴增） |
+| USDG 配對池總數 | 約 12 萬（memecoin 為主） |
+| **股票 × USDG 池** | **5,004**（其中最近一天新建 808 個） |
+| 無 hooks | 4,197；再加費率 0.1%–6% 內 | **2,082** |
+| 動態費率 | 556 |
+| 費率分布（無 hooks） | 最多的是 **90%、88%、95%** 費率的陷阱池（各 100–300 個），其次才是 5% |
+| 池數最多的股票 | DJT 318、WYFI 208、NVDA 206、GME 162、RDDT 155 |
+
+結論：池子宇宙比 §11.7 原估的 300–600 多一個量級，但絕大多數是高費率或空池；需要 D16 的預篩，真正拉 Swap 的池預期只有一兩百個。
+
 ## 其他設計決策（規格未定義或我打算不同做法）
 
 | # | 主題 | 決策 |
@@ -206,6 +222,7 @@ LP 地址數: 9，同時也在交易的 LP: 4  ⚠️
 | D12 | Swap 時間戳 | 每日區間的首尾兩塊取真實時間戳，中間依區塊號線性內插（0.104 s/塊 → 誤差 < 1 分鐘），省下每筆 `getBlock`。 |
 | D13 | 股票在哪一邊 | v4 依地址排序決定 currency0/1，實測最大的 SOFI/USDG 池 USDG 是 currency0（USDG `0x5fc5…` < SOFI `0x98e7…`）。`pools.stock_is_token0` 記錄；`price_usd` 一律為「股票 / USDG」，與 SPEC §6「token0 以 USD 計價」不同。 |
 | D14 | P1 摘要排序 | 尚無 §7 模擬，Top 5 依 `raw_apr = fees_24h × 365 / tvl` 排序，摘要內明示「原始 APR」。 |
+| D16 | Swap 拉取預篩 | 只對「無 hooks ∧ 費率在範圍 ∧ DexScreener TVL ≥ `scan.swap_fetch_min_tvl_usd`（預設 $1,000）」的池拉 Swap log。其餘池仍寫快照但 `volume/fees = 0`，反正必被 `has_hooks / fee_out_of_range / tvl_too_small / tvl_unknown` 硬排除。原因：backfill 實測股票 × USDG 池有 5,004 個、通過 hooks/費率的 2,082 個，全拉 Swap 要 ~19k 次 getLogs/日。 |
 | D15 | 池子發現只掃 v4 | v3 / v2 Factory 地址已記錄（11.4），但實測 DexScreener 上 SOFI 的 29 個池全是 v4，第一版不掃 v3/v2；`pools.protocol` 欄位保留。 |
 
 ---

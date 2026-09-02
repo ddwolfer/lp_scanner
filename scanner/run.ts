@@ -23,7 +23,7 @@ export async function runDaily(opts: { dbPath?: string; now?: Date } = {}) {
   const now = opts.now ?? new Date(); const date = taipeiDate(now); const usage = new ApiUsage()
   const db = openDb(opts.dbPath ?? 'db/lp.sqlite'); const scoring = loadScoring()
   const runId = Number(db.prepare(`INSERT INTO scan_runs(started_at) VALUES (?)`).run(now.toISOString()).lastInsertRowid)
-  let poolsScanned = 0
+  let poolsScanned = 0, swapPools = 0
   try {
     const rpc = makeRpc({ usage })
     // 1. 白名單與公司行動
@@ -64,12 +64,14 @@ export async function runDaily(opts: { dbPath?: string; now?: Date } = {}) {
       poolsScanned++
       const stockAddr: string = p.stock_is_token0 ? p.token0 : p.token1; const asset = stockByAddr.get(stockAddr)
       const feeOk = p.fee_ppm !== null && p.fee_ppm >= scoring.exclusions.fee_ppm_min && p.fee_ppm <= scoring.exclusions.fee_ppm_max
-      const worth = p.hooks === ADDR.zero && feeOk
+      const tvl = tvlByPool.get(p.pool_id) ?? null
+      // DECISIONS D16：只對無 hooks、費率合理、DexScreener TVL ≥ 門檻的池拉 Swap（其餘必被硬排除）
+      const worth = p.hooks === ADDR.zero && feeOk && tvl !== null && tvl >= scoring.scan.swap_fetch_min_tvl_usd
+      if (worth) swapPools++
       const hourly = worth ? aggregateHourly(await fetchSwaps(rpc, p.pool_id, dayFrom, latest), interp, !!p.stock_is_token0, tsFrom, tsTo) : []
       if (hourly.length) writeHourly(db, p.pool_id, hourly)
       const volume = hourly.reduce((a, r) => a + r.volumeUsd, 0), fees = hourly.reduce((a, r) => a + r.feesUsd, 0), swaps = hourly.reduce((a, r) => a + r.swapCount, 0)
       const lastPrice = [...hourly].reverse().find(r => r.priceUsd !== null)?.priceUsd ?? null
-      const tvl = tvlByPool.get(p.pool_id) ?? null
       const quote = asset ? quoteBySymbol.get(asset.tokenSymbol) ?? null : null
       const age = p.created_at ? ageDays(p.created_at, date) : null
       const v7 = vol7([...recentVolumes(db, p.pool_id, date), volume])
@@ -100,7 +102,7 @@ export async function runDaily(opts: { dbPath?: string; now?: Date } = {}) {
     pruneHourly(db)
     db.prepare(`UPDATE scan_runs SET finished_at=?, ok=1, pools_scanned=?, api_calls=?, error=? WHERE id=?`)
       .run(new Date().toISOString(), poolsScanned, JSON.stringify(usage.toJSON()), sent === 'not_configured' ? 'telegram_not_configured' : null, runId)
-    log(`done. telegram=${sent} api_calls=${JSON.stringify(usage.toJSON())}`)
+    log(`done. swap-fetched pools=${swapPools}. telegram=${sent} api_calls=${JSON.stringify(usage.toJSON())}`)
   } catch (e) {
     db.prepare(`UPDATE scan_runs SET finished_at=?, ok=0, pools_scanned=?, api_calls=?, error=? WHERE id=?`).run(new Date().toISOString(), poolsScanned, JSON.stringify(usage.toJSON()), String((e as Error).stack ?? e), runId)
     throw e

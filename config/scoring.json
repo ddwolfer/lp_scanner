@@ -6,5 +6,6 @@
     "corp_action_window_days": 14, "wash_top1_share": 0.6, "wash_pingpong_ratio": 0.3,
     "wash_overlap_volume_share": 0.5
   },
-  "wash_analysis_top_n": 20
+  "wash_analysis_top_n": 20,
+  "scan": { "swap_fetch_min_tvl_usd": 1000 }
 }
