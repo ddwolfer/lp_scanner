@@ -18,6 +18,7 @@ export class Limiter {
   }
 }
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
+export const isTooManyLogs = (e: unknown) => /exceeds limit|Missing or invalid parameters|query returned more than|response size/i.test(String((e as Error)?.message ?? e))
 export interface Rpc {
   client: PublicClient
   call<T>(fn: () => Promise<T>): Promise<T>
@@ -52,7 +53,15 @@ export function makeRpc(o: { usage: ApiUsage; url?: string; concurrency?: number
     client, call,
     getBlockNumber: () => call(() => client.getBlockNumber()),
     async getLogsChunked(p, from, to, chunk = BigInt(CHAIN.getLogsChunk)) {
-      const parts = await Promise.all(chunkRanges(from, to, chunk).map(([a, b]) => call(() => client.getLogs({ ...(p as any), fromBlock: a, toBlock: b }))))
+      // 單段超過 10k logs 時 public RPC 回 "exceeds limit" 或 "Missing or invalid parameters"（DECISIONS D17）→ 對半切
+      const one = async (a: bigint, b: bigint): Promise<Log[]> => {
+        try { return await call(() => client.getLogs({ ...(p as any), fromBlock: a, toBlock: b })) }
+        catch (e) {
+          if (b > a && isTooManyLogs(e)) { const mid = a + (b - a) / 2n; return [...await one(a, mid), ...await one(mid + 1n, b)] }
+          throw e
+        }
+      }
+      const parts = await Promise.all(chunkRanges(from, to, chunk).map(([a, b]) => one(a, b)))
       return parts.flat()
     },
   }

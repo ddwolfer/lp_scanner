@@ -8,3 +8,9 @@ it('Limiter 同時最多 N 個', async () => {
   await Promise.all([1,2,3,4,5].map(() => lim.run(async () => { active++; max = Math.max(max, active); await new Promise(r => setTimeout(r, 5)); active-- })))
   expect(max).toBe(2)
 })
+import { isTooManyLogs } from '../scanner/sources/rpc.js'
+it('isTooManyLogs 辨識 public RPC 的兩種超量訊息', () => {
+  expect(isTooManyLogs(new Error('logs matched by query exceeds limit of 10000'))).toBe(true)
+  expect(isTooManyLogs(new Error('Missing or invalid parameters.'))).toBe(true)
+  expect(isTooManyLogs(new Error('Too Many Requests'))).toBe(false)
+})

@@ -204,6 +204,24 @@ LP 地址數: 9，同時也在交易的 LP: 4  ⚠️
 
 結論：池子宇宙比 §11.7 原估的 300–600 多一個量級，但絕大多數是高費率或空池；需要 D16 的預篩，真正拉 Swap 的池預期只有一兩百個。
 
+### 11.7 補充：首次 `pnpm scan` 實測（2026-09-03 台北 04:27–04:56）
+
+| 項目 | 實測 |
+|---|---|
+| 池數 | 5,021（含當日新發現 16 個） |
+| 拉 Swap 的池（D16 預篩後） | **485** |
+| API 呼叫 | rpc **4,572**、robinhood 216、dexscreener 193 |
+| 耗時 | **29 分鐘**（DexScreener 4 分鐘受 60/min 限制；其餘為 RPC） |
+| 有 DexScreener TVL 的池 | 914 / 5,021（其餘 `tvl_unknown`） |
+| 候選（未硬排除） | 40 |
+| flags | tvl_too_small 4,733、tvl_unknown 4,107、fee_out_of_range 2,860、too_new 2,800、has_hooks 809、swap_fetch_failed 1 |
+| 價格驗證 | 池價 vs Robinhood mid 偏離多在 ±4% 內（如 BA 207.12 vs 208.89、F 14.15 vs 14.13），證明 D4/D13 換算正確 |
+| 第一次跑失敗原因 | public RPC 對 Swap getLogs 突發 429，5 次退避不夠 → 改併發 2、間隔 250ms、8 次退避上限 30 秒後整輪無 429 |
+
+結論：每日用量約 5k RPC 次，遠低於 Alchemy 免費額度；public RPC 也撐得住。29 分鐘的執行時間對 07:30 排程可接受。
+
+**觀察（供 P2/P3 參考）**：`too_new` 的池裡有 24h 手續費 ≥ TVL 的極端案例（SNAP 5,662 筆 swap、$5k TVL、$19.8k 手續費），這正是 §1 描述的「剛開池、刷量、被套利掃光」陷阱，7 天年齡門檻與 P3 刷量分析會處理。
+
 ## 其他設計決策（規格未定義或我打算不同做法）
 
 | # | 主題 | 決策 |
@@ -222,6 +240,7 @@ LP 地址數: 9，同時也在交易的 LP: 4  ⚠️
 | D12 | Swap 時間戳 | 每日區間的首尾兩塊取真實時間戳，中間依區塊號線性內插（0.104 s/塊 → 誤差 < 1 分鐘），省下每筆 `getBlock`。 |
 | D13 | 股票在哪一邊 | v4 依地址排序決定 currency0/1，實測最大的 SOFI/USDG 池 USDG 是 currency0（USDG `0x5fc5…` < SOFI `0x98e7…`）。`pools.stock_is_token0` 記錄；`price_usd` 一律為「股票 / USDG」，與 SPEC §6「token0 以 USD 計價」不同。 |
 | D14 | P1 摘要排序 | 尚無 §7 模擬，Top 5 依 `raw_apr = fees_24h × 365 / tvl` 排序，摘要內明示「原始 APR」。 |
+| D17 | getLogs 超量自動對半切 | public RPC 單段超過 10k logs 時除了 `exceeds limit` 也可能回 `Missing or invalid parameters`（DJT/USDG 池實測 100k 塊有 8,734 筆 swap）。`getLogsChunked` 遇到即遞迴對半切。 |
 | D16 | Swap 拉取預篩 | 只對「無 hooks ∧ 費率在範圍 ∧ DexScreener TVL ≥ `scan.swap_fetch_min_tvl_usd`（預設 $1,000）」的池拉 Swap log。其餘池仍寫快照但 `volume/fees = 0`，反正必被 `has_hooks / fee_out_of_range / tvl_too_small / tvl_unknown` 硬排除。原因：backfill 實測股票 × USDG 池有 5,004 個、通過 hooks/費率的 2,082 個，全拉 Swap 要 ~19k 次 getLogs/日。 |
 | D15 | 池子發現只掃 v4 | v3 / v2 Factory 地址已記錄（11.4），但實測 DexScreener 上 SOFI 的 29 個池全是 v4，第一版不掃 v3/v2；`pools.protocol` 欄位保留。 |
 
