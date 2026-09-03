@@ -4,7 +4,7 @@ import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YA
 import { api, fmtNum, fmtUsd } from '../api'
 export default function Positions() {
   const [list, setList] = useState<any[]>([]); const [err, setErr] = useState('')
-  const [f, setF] = useState({ pool_id: '', label: '', range_lower: '', range_upper: '', deposit_usd: '', opened_at: new Date().toISOString().slice(0, 16), notes: '' })
+  const [f, setF] = useState({ pool_id: '', label: '', range_lower: '', range_upper: '', deposit_usd: '', opened_at: new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16), notes: '' })
   const load = () => api<any[]>('/api/positions').then(setList).catch(e => setErr(String(e)))
   useEffect(() => { load() }, [])
   const submit = async (e: React.FormEvent) => {
