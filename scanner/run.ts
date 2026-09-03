@@ -103,7 +103,7 @@ export async function runDaily(opts: { dbPath?: string; now?: Date } = {}) {
     const text = formatDailySummary({ date, weekdayZh: WEEKDAY_ZH[new Date(date + 'T00:00:00+08:00').getDay()], poolsScanned, candidates: cands.length,
       top: cands.slice(0, 5).map(r => ({ label: label(r), feePct: (r.fee_ppm / 1e4).toFixed(2) + '%', rawApr: r.raw_apr ?? 0, tvlUsd: r.tvl_usd ?? 0, traderCount: r.trader_count })), changes, positions: [] })
     console.log('\n' + text + '\n')
-    const sent = await sendTelegram(text, { token: process.env.TELEGRAM_BOT_TOKEN, chatId: process.env.TELEGRAM_CHAT_ID })
+    const sent = await sendTelegram(text, { token: process.env.TELEGRAM_BOT_TOKEN, chatId: process.env.TELEGRAM_CHAT_ID, topicId: process.env.TELEGRAM_TOPIC_ID })
     pruneHourly(db)
     db.prepare(`UPDATE scan_runs SET finished_at=?, ok=1, pools_scanned=?, api_calls=?, error=? WHERE id=?`)
       .run(new Date().toISOString(), poolsScanned, JSON.stringify(usage.toJSON()), sent === 'not_configured' ? 'telegram_not_configured' : null, runId)
