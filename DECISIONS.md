@@ -248,6 +248,12 @@ LP 地址數: 9，同時也在交易的 LP: 4  ⚠️
 | D12 | Swap 時間戳 | 每日區間的首尾兩塊取真實時間戳，中間依區塊號線性內插（0.104 s/塊 → 誤差 < 1 分鐘），省下每筆 `getBlock`。 |
 | D13 | 股票在哪一邊 | v4 依地址排序決定 currency0/1，實測最大的 SOFI/USDG 池 USDG 是 currency0（USDG `0x5fc5…` < SOFI `0x98e7…`）。`pools.stock_is_token0` 記錄；`price_usd` 一律為「股票 / USDG」，與 SPEC §6「token0 以 USD 計價」不同。 |
 | D14 | P1 摘要排序 | 尚無 §7 模擬，Top 5 依 `raw_apr = fees_24h × 365 / tvl` 排序，摘要內明示「原始 APR」。 |
+| D18 | 模擬份額單位（P2） | `share_h = L_raw / (L_pool_h + L_raw)`，`L_pool_h` = 該小時最後一筆 Swap 的 `liquidity`，`L_raw = L_human × 1e12`（股票 18 / USDG 6 decimals，不論股票在 token0 或 token1；推導在 `lp-math.ts` 註解）。實測 SOFI 池 $1,000 對 $20k TVL 得 5.7% 份額，量級合理。比 §7.2 的 `D/(tvl+D)` 精確，因為只算「同區間內」的活躍流動性。 |
+| D19 | IL 定義 | `il_usd = value_end − (x0 × P_end + y0)`，x0/y0 為開倉時的持有量。即真正的 impermanent loss（負值 = 相對持有虧損），§7.3 的「D × (P_end/P₀ 持有對照)」以此實作。 |
+| D20 | `rank_norm` | net_apr 在當日未排除池中的百分位：rank / (n − 1)，n = 1 時為 1。 |
+| D21 | 無參考價的池 | `price_dev` 項給 0 分（視為偏離 5%）；股票代幣理論上都有 `/prices`，此情況只會在 API 失敗時出現。 |
+| D22 | 模擬範圍 | 只對當日未硬排除的池跑模擬與評分（省時間）；排除池 `sim`/`score` 為 NULL，dashboard 顯示「未模擬」。`pnpm scan --sim-only` 可不重抓資料只重跑模擬與評分（改權重後用）。 |
+| D23 | σ₇ 來源標記 | P2 起 σ₇ 一律用 `pool_hourly.price_usd`，候選池 flags 加 `sigma_from_pool`（11.3 決策）。Robinhood 參考價每日累積後，第二版再改。 |
 | D17 | getLogs 超量自動對半切 | public RPC 單段超過 10k logs 時除了 `exceeds limit` 也可能回 `Missing or invalid parameters`（DJT/USDG 池實測 100k 塊有 8,734 筆 swap）。`getLogsChunked` 遇到即遞迴對半切。 |
 | D16 | Swap 拉取預篩 | 只對「無 hooks ∧ 費率在範圍 ∧ DexScreener TVL ≥ `scan.swap_fetch_min_tvl_usd`（預設 $1,000）」的池拉 Swap log。其餘池仍寫快照但 `volume/fees = 0`，反正必被 `has_hooks / fee_out_of_range / tvl_too_small / tvl_unknown` 硬排除。原因：backfill 實測股票 × USDG 池有 5,004 個、通過 hooks/費率的 2,082 個，全拉 Swap 要 ~19k 次 getLogs/日。 |
 | D15 | 池子發現只掃 v4 | v3 / v2 Factory 地址已記錄（11.4），但實測 DexScreener 上 SOFI 的 29 個池全是 v4，第一版不掃 v3/v2；`pools.protocol` 欄位保留。 |
