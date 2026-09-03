@@ -2,12 +2,13 @@ import { it, expect, vi } from 'vitest'
 import { formatDailySummary } from '../scanner/notify/summary.js'
 import { sendTelegram } from '../scanner/notify/telegram.js'
 it('格式符合 §13', () => {
-  const s = formatDailySummary({ date: '2026-09-10', weekdayZh: '三', poolsScanned: 312, candidates: 14,
-    top: [{ label: 'SOFI/USDG v4', feePct: '3.29%', rawApr: 4.12, tvlUsd: 20118, traderCount: 34 }],
+  const s = formatDailySummary({ date: '2026-09-10', weekdayZh: '三', poolsScanned: 312, candidates: 14, sortKey: 'd1000.r25',
+    top: [{ label: 'SOFI/USDG v4', feePct: '3.29%', netApr: 4.12, inRangePct: 0.91, traderCount: 34 }],
     changes: [{ label: 'IBM/USDG', kind: 'dropped', reason: 'corp_action_pending' }, { label: 'AAPL/USDG', kind: 'added' }], positions: [] })
   expect(s).toContain('📊 LP 掃描 2026-09-10 (三)')
   expect(s).toContain('掃描 312 池，候選 14')
-  expect(s).toContain('1. SOFI/USDG v4 3.29%  原始 APR 412%  TVL $20,118  交易者 34')
+  expect(s).toContain('Top 5 (投入 $1000, ±25%)')
+  expect(s).toContain('1. SOFI/USDG v4 3.29%  net APR 412%  在區間 91%  交易者 34')
   expect(s).toContain('- IBM/USDG 掉出候選: corp_action_pending')
   expect(s).toContain('- AAPL/USDG 新進候選')
 })
