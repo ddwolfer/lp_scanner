@@ -259,6 +259,8 @@ LP 地址數: 9，同時也在交易的 LP: 4  ⚠️
 | D12 | Swap 時間戳 | 每日區間的首尾兩塊取真實時間戳，中間依區塊號線性內插（0.104 s/塊 → 誤差 < 1 分鐘），省下每筆 `getBlock`。 |
 | D13 | 股票在哪一邊 | v4 依地址排序決定 currency0/1，實測最大的 SOFI/USDG 池 USDG 是 currency0（USDG `0x5fc5…` < SOFI `0x98e7…`）。`pools.stock_is_token0` 記錄；`price_usd` 一律為「股票 / USDG」，與 SPEC §6「token0 以 USD 計價」不同。 |
 | D14 | P1 摘要排序 | 尚無 §7 模擬，Top 5 依 `raw_apr = fees_24h × 365 / tvl` 排序，摘要內明示「原始 APR」。 |
+| D27 | 頭寸卡片估算（P4，P5 前暫代） | 現值 / 累積手續費 / 在區間以 `pool_hourly` 從 `opened_at` 起用 §7 引擎模擬（區間寬度由登錄的上下限反推），標示「估算」。P5 才記錄每日真實值並比對。 |
+| D28 | Dashboard 安全 | Fastify 綁 `0.0.0.0:3000`、無登入、無 tunnel（SPEC §9.4 / §10.4）；唯一寫入是 `POST /api/positions` 與 `PATCH /api/positions/:id/close`。 |
 | D24 | tx.from 來源（P3） | v4 Swap 的 `sender` 是 router，真正交易者要 `eth_getTransactionByHash` 取 `from`。Alchemy 免費方案允許此方法（只有 getLogs 被限 10 塊），有 `ALCHEMY_KEY` 就走 Alchemy（併發 8）；沒有就 public RPC。 |
 | D25 | 刷量分析取樣 | 每池只取當日**最新 800 筆** swap（`scan.wash_sample_swaps`）解析 tx.from，超過即 `flags += wash_sampled`。原因：前 20 名池每池數千筆，全解析要 6 萬次/日 ≈ 每月 30M CU，正好吃光 Alchemy 免費額度；800 筆已足以看集中度與對打。 |
 | D26 | 刷量分析範圍與重新評分 | 只對評分前 `wash_analysis_top_n = 20` 名跑；命中 `wash_suspect` 的池 `excluded = 1` 並從百分位移除後，其餘候選重新評分。`trader_count` 只有這 20 池有值，其他池摘要顯示「—」。 |

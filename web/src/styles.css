@@ -1,0 +1,62 @@
+/* 交易桌風格：深炭底、琥珀強調、等寬數字、緊湊列高（1080p 一頁前 20 名） */
+:root {
+  --bg: #0e1013; --bg-2: #14171c; --bg-3: #1b1f26; --line: #262b34; --line-2: #333a46;
+  --fg: #d9dde3; --fg-2: #98a1ad; --fg-3: #626b78;
+  --amber: #f2b135; --amber-2: #b98120; --green: #4fd18b; --red: #f0625d; --blue: #6db3f2;
+  --mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --sans: 'IBM Plex Sans TC', 'Noto Sans TC', 'PingFang TC', 'Microsoft JhengHei', sans-serif;
+}
+* { box-sizing: border-box }
+html, body { margin: 0; background: var(--bg); color: var(--fg); font-family: var(--sans); font-size: 13px; }
+body { background-image: radial-gradient(1200px 400px at 20% -10%, rgba(242,177,53,.07), transparent 60%), repeating-linear-gradient(0deg, transparent 0 3px, rgba(255,255,255,.012) 3px 4px); }
+a { color: var(--amber); text-decoration: none } a:hover { text-decoration: underline }
+.num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+header.top { display: flex; align-items: baseline; gap: 18px; padding: 10px 18px; border-bottom: 1px solid var(--line); background: linear-gradient(180deg, var(--bg-2), var(--bg)); position: sticky; top: 0; z-index: 5; }
+header.top .brand { font-family: var(--mono); font-weight: 600; letter-spacing: .12em; color: var(--amber); font-size: 14px; text-transform: uppercase }
+header.top .brand small { color: var(--fg-3); font-weight: 400; letter-spacing: 0; margin-left: 8px; text-transform: none }
+header.top nav a { color: var(--fg-2); margin-right: 14px; padding: 3px 0; border-bottom: 2px solid transparent }
+header.top nav a.active { color: var(--fg); border-color: var(--amber) }
+header.top .right { margin-left: auto; color: var(--fg-3); font-family: var(--mono); font-size: 11px }
+main { padding: 12px 18px 40px; animation: rise .35s ease-out both }
+@keyframes rise { from { opacity: 0; transform: translateY(6px) } to { opacity: 1; transform: none } }
+.toolbar { display: flex; flex-wrap: wrap; gap: 10px 22px; align-items: center; margin-bottom: 10px; }
+.toolbar label { color: var(--fg-3); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; margin-right: 6px }
+.seg { display: inline-flex; border: 1px solid var(--line-2); border-radius: 4px; overflow: hidden }
+.seg button { background: transparent; border: 0; color: var(--fg-2); padding: 4px 10px; font: inherit; font-family: var(--mono); cursor: pointer; border-right: 1px solid var(--line-2) }
+.seg button:last-child { border-right: 0 }
+.seg button.on { background: var(--amber); color: #1a1408; font-weight: 600 }
+.seg button:hover:not(.on) { background: var(--bg-3); color: var(--fg) }
+select, input, textarea { background: var(--bg-3); color: var(--fg); border: 1px solid var(--line-2); border-radius: 4px; padding: 4px 8px; font: inherit; font-family: var(--mono) }
+button.primary { background: var(--amber); color: #1a1408; border: 0; border-radius: 4px; padding: 6px 14px; font: inherit; font-weight: 600; cursor: pointer }
+button.ghost { background: transparent; color: var(--fg-2); border: 1px solid var(--line-2); border-radius: 4px; padding: 5px 12px; font: inherit; cursor: pointer }
+table.grid { width: 100%; border-collapse: collapse; font-size: 12px; }
+table.grid th { position: sticky; top: 42px; background: var(--bg-2); color: var(--fg-3); font-weight: 500; text-align: right; padding: 6px 8px; border-bottom: 1px solid var(--line-2); white-space: nowrap; cursor: pointer; user-select: none; font-size: 11px; letter-spacing: .04em }
+table.grid th.l, table.grid td.l { text-align: left }
+table.grid th.sorted { color: var(--amber) }
+table.grid td { padding: 4px 8px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; height: 30px }
+table.grid tr:hover td { background: rgba(242,177,53,.05) }
+table.grid tr.excluded td { color: var(--fg-3); background: rgba(255,255,255,.015) }
+table.grid tr.excluded td a { color: var(--fg-2) }
+.pos { color: var(--green) } .neg { color: var(--red) } .warn { color: var(--amber) }
+.arrow { display: inline-block; min-width: 34px; font-family: var(--mono); font-size: 11px; color: var(--fg-3) }
+.arrow.up { color: var(--green) } .arrow.down { color: var(--red) } .arrow.new { color: var(--amber) }
+.chip { display: inline-block; font-family: var(--mono); font-size: 10px; padding: 1px 5px; border-radius: 3px; border: 1px solid var(--line-2); color: var(--fg-2); margin-right: 3px; background: var(--bg-3) }
+.chip.bad { border-color: rgba(240,98,93,.5); color: var(--red) }
+.chip.hooks { border-color: rgba(109,179,242,.5); color: var(--blue) }
+.card { background: var(--bg-2); border: 1px solid var(--line); border-radius: 6px; padding: 12px 14px; }
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 12px }
+.kv { display: grid; grid-template-columns: max-content 1fr; gap: 3px 14px; font-size: 12px }
+.kv dt { color: var(--fg-3) } .kv dd { margin: 0; font-family: var(--mono) }
+h1 { font-size: 20px; margin: 4px 0 2px; font-weight: 600 } h1 .sym { color: var(--amber); font-family: var(--mono) }
+h2 { font-size: 12px; color: var(--fg-3); letter-spacing: .1em; text-transform: uppercase; margin: 18px 0 8px; font-weight: 500 }
+.charts { display: grid; grid-template-columns: 1fr 1fr; gap: 14px }
+.chart { background: var(--bg-2); border: 1px solid var(--line); border-radius: 6px; padding: 8px 8px 0 }
+.chart .t { font-size: 11px; color: var(--fg-3); letter-spacing: .08em; text-transform: uppercase; padding: 2px 6px 6px }
+.alert { border-left: 3px solid var(--red); background: rgba(240,98,93,.08); padding: 8px 12px; border-radius: 4px; margin: 8px 0 }
+.muted { color: var(--fg-3) }
+form.pos-form { display: grid; grid-template-columns: repeat(6, minmax(120px, 1fr)); gap: 8px; align-items: end }
+form.pos-form label { display: flex; flex-direction: column; gap: 3px; font-size: 11px; color: var(--fg-3) }
+.stat { font-family: var(--mono); font-size: 20px; font-weight: 500 }
+.stat small { font-size: 11px; color: var(--fg-3); margin-left: 4px }
+.recharts-cartesian-axis-tick text { fill: var(--fg-3); font-family: var(--mono); font-size: 10px }
+.recharts-default-tooltip { background: var(--bg-3) !important; border: 1px solid var(--line-2) !important; font-family: var(--mono); font-size: 11px }

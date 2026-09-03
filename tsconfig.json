@@ -1,8 +1,23 @@
 {
   "compilerOptions": {
-    "target": "ES2022", "module": "NodeNext", "moduleResolution": "NodeNext",
-    "strict": true, "esModuleInterop": true, "skipLibCheck": true,
-    "resolveJsonModule": true, "noEmit": true, "types": ["node"]
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "noEmit": true,
+    "types": [
+      "node"
+    ]
   },
-  "include": ["config", "db", "scanner", "scripts", "tests"]
+  "include": [
+    "config",
+    "db",
+    "scanner",
+    "scripts",
+    "server",
+    "tests"
+  ]
 }
