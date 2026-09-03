@@ -73,5 +73,11 @@ export function loadHourly(db: Database.Database, poolId: string, maxHours = 720
   return out
 }
 export function updateSim(db: Database.Database, poolId: string, date: string, sim: SimJson, score: number | null, flags: string[]) {
-  db.prepare('UPDATE pool_snapshots SET sim=?, score=?, flags=? WHERE pool_id=? AND date=?').run(JSON.stringify(sim), score, JSON.stringify(flags), poolId, date)
+  db.prepare('UPDATE pool_snapshots SET sim=?, score=?, flags=? WHERE pool_id=? AND date=?').run(JSON.stringify(sim), score, JSON.stringify([...new Set(flags)]), poolId, date)
+}
+
+import type { WashMetrics } from './metrics/wash.js'
+export function updateWash(db: Database.Database, poolId: string, date: string, m: WashMetrics, flags: string[], excluded: number, sampled: boolean) {
+  db.prepare(`UPDATE pool_snapshots SET trader_count=?, top1_share=?, pingpong_ratio=?, lp_trader_overlap=?, lp_overlap_volume_share=?, wash_detail=?, flags=?, excluded=? WHERE pool_id=? AND date=?`)
+    .run(m.traderCount, m.top1Share, m.pingpongRatio, m.lpTraderOverlap, m.lpOverlapVolumeShare, JSON.stringify({ topTraders: m.topTraders, hourly: m.hourly, sampled }), JSON.stringify([...new Set(flags)]), excluded, poolId, date)
 }

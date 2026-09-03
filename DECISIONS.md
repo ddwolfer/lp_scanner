@@ -230,6 +230,17 @@ LP 地址數: 9，同時也在交易的 LP: 4  ⚠️
 
 **觀察（供 P2/P3 參考）**：`too_new` 的池裡有 24h 手續費 ≥ TVL 的極端案例（SNAP 5,662 筆 swap、$5k TVL、$19.8k 手續費），這正是 §1 描述的「剛開池、刷量、被套利掃光」陷阱，7 天年齡門檻與 P3 刷量分析會處理。
 
+### 11.7 補充：P3 刷量分析實測（2026-09-03）
+
+| 項目 | 實測 |
+|---|---|
+| 分析池數 | 前 20 名 |
+| 耗時 | 9 分鐘 |
+| 呼叫 | public RPC 366（Swap + ModifyLiquidity log）、**Alchemy 10,301**（tx.from）≈ 175k CU/日 ≈ 5M CU/月 |
+| 取樣 | 9 池超過 800 筆被取樣（最多 10,746 筆/日） |
+| 命中 | COIN/USDG：對打比例 42% → `wash_suspect`；其餘 top1 佔比 3–43%、LP 重疊成交量 ≤ 8% |
+| 失敗 | 1 池 RPC 暫時錯誤，非致命，隔日重跑 |
+
 ## 其他設計決策（規格未定義或我打算不同做法）
 
 | # | 主題 | 決策 |
@@ -248,6 +259,9 @@ LP 地址數: 9，同時也在交易的 LP: 4  ⚠️
 | D12 | Swap 時間戳 | 每日區間的首尾兩塊取真實時間戳，中間依區塊號線性內插（0.104 s/塊 → 誤差 < 1 分鐘），省下每筆 `getBlock`。 |
 | D13 | 股票在哪一邊 | v4 依地址排序決定 currency0/1，實測最大的 SOFI/USDG 池 USDG 是 currency0（USDG `0x5fc5…` < SOFI `0x98e7…`）。`pools.stock_is_token0` 記錄；`price_usd` 一律為「股票 / USDG」，與 SPEC §6「token0 以 USD 計價」不同。 |
 | D14 | P1 摘要排序 | 尚無 §7 模擬，Top 5 依 `raw_apr = fees_24h × 365 / tvl` 排序，摘要內明示「原始 APR」。 |
+| D24 | tx.from 來源（P3） | v4 Swap 的 `sender` 是 router，真正交易者要 `eth_getTransactionByHash` 取 `from`。Alchemy 免費方案允許此方法（只有 getLogs 被限 10 塊），有 `ALCHEMY_KEY` 就走 Alchemy（併發 8）；沒有就 public RPC。 |
+| D25 | 刷量分析取樣 | 每池只取當日**最新 800 筆** swap（`scan.wash_sample_swaps`）解析 tx.from，超過即 `flags += wash_sampled`。原因：前 20 名池每池數千筆，全解析要 6 萬次/日 ≈ 每月 30M CU，正好吃光 Alchemy 免費額度；800 筆已足以看集中度與對打。 |
+| D26 | 刷量分析範圍與重新評分 | 只對評分前 `wash_analysis_top_n = 20` 名跑；命中 `wash_suspect` 的池 `excluded = 1` 並從百分位移除後，其餘候選重新評分。`trader_count` 只有這 20 池有值，其他池摘要顯示「—」。 |
 | D18 | 模擬份額單位（P2） | `share_h = L_raw / (L_pool_h + L_raw)`，`L_pool_h` = 該小時最後一筆 Swap 的 `liquidity`，`L_raw = L_human × 1e12`（股票 18 / USDG 6 decimals，不論股票在 token0 或 token1；推導在 `lp-math.ts` 註解）。實測 SOFI 池 $1,000 對 $20k TVL 得 5.7% 份額，量級合理。比 §7.2 的 `D/(tvl+D)` 精確，因為只算「同區間內」的活躍流動性。 |
 | D19 | IL 定義 | `il_usd = value_end − (x0 × P_end + y0)`，x0/y0 為開倉時的持有量。即真正的 impermanent loss（負值 = 相對持有虧損），§7.3 的「D × (P_end/P₀ 持有對照)」以此實作。 |
 | D20 | `rank_norm` | net_apr 在當日未排除池中的百分位：rank / (n − 1)，n = 1 時為 1。 |

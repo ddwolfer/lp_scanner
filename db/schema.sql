@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS pool_snapshots (
   age_days INTEGER, vol7_avg_usd REAL, vol7_cv REAL,
   raw_apr REAL,                      -- [P1] fees_24h*365/tvl，P1 摘要排序用
   sim TEXT, score REAL, flags TEXT, excluded INTEGER DEFAULT 0,
+  wash_detail TEXT,                  -- [P3] JSON {topTraders, hourly, sampled}
   PRIMARY KEY (pool_id, date)
 );
 CREATE TABLE IF NOT EXISTS pool_hourly (

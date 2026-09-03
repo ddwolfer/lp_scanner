@@ -39,3 +39,7 @@ export async function readSlot0(rpc: Rpc, poolId: string) {
   ])
   return { sqrtPriceX96: BigInt(slot[0]), tick: Number(slot[1]), liquidity: BigInt(liq) }
 }
+export async function fetchModifyLiquidity(rpc: Rpc, poolId: string, from: bigint, to: bigint): Promise<{ txHash: string; sender: string }[]> {
+  const logs = await rpc.getLogsChunked({ address: ADDR.poolManager, event: MODIFY_LIQUIDITY_EVENT, args: { id: poolId } }, from, to)
+  return logs.map((l: any) => ({ txHash: String(l.transactionHash), sender: String(l.args.sender).toLowerCase() }))
+}

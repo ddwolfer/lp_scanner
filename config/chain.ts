@@ -36,7 +36,7 @@ const ScoringSchema = z.object({
     wash_overlap_volume_share: z.number(),
   }),
   wash_analysis_top_n: z.number(),
-  scan: z.object({ swap_fetch_min_tvl_usd: z.number() }),
+  scan: z.object({ swap_fetch_min_tvl_usd: z.number(), wash_sample_swaps: z.number() }),
 })
 export type Scoring = z.infer<typeof ScoringSchema>
 export function loadScoring(path: URL | string = new URL('./scoring.json', import.meta.url)): Scoring {
