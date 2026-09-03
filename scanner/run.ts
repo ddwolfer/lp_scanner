@@ -17,6 +17,10 @@ import { upsertTokens, upsertPools, writeHourly, writeSnapshot, previousCandidat
 import { simulateAll, type SimJson } from './metrics/simulate.js'
 import { weeklySigma } from './metrics/volatility.js'
 import { scorePools, getSimField } from './metrics/score.js'
+import { analyzeWash, type WashSwap } from './metrics/wash.js'
+import { fetchModifyLiquidity } from './sources/uniswapV4.js'
+import { makeTraderRpc, resolveTxFrom } from './sources/traders.js'
+import { updateWash } from './steps.js'
 
 const WEEKDAY_ZH = ['日', '一', '二', '三', '四', '五', '六']
 const STOCKISH = /^[A-Z]{1,5}$/
@@ -109,7 +113,44 @@ export async function runDaily(opts: { dbPath?: string; now?: Date; simOnly?: bo
     const scores = scorePools(candRows.map(r => ({ poolId: r.pool_id, sim: simById.get(r.pool_id)!.sim, vol7Cv: r.vol7_cv ?? 0, traderCount: r.trader_count, priceDevPct: r.price_dev_pct, allDayTradable: r.all_day_tradable === 'tradable' })), scoring)
     for (const [id, v] of simById) updateSim(db, id, date, v.sim, scores.get(id) ?? null, v.flags)
     log(`simulated ${simById.size} candidate pools`)
-    // 6. 摘要
+    // 6. 刷量分析（SPEC §5/§8.1，P3）：只對評分前 N 名，命中門檻加 wash_suspect 後重新評分（DECISIONS D26）
+    const topN = [...scores.entries()].sort((a, b) => b[1] - a[1]).slice(0, scoring.wash_analysis_top_n).map(([id]) => id)
+    if (topN.length) {
+      const wrpc = makeRpc({ usage }); const latestW = await wrpc.getBlockNumber(); const dayFromW = latestW - BigInt(CHAIN.blocksPerDay)
+      const tsFromW = Number((await wrpc.call(() => wrpc.client.getBlock({ blockNumber: dayFromW }))).timestamp)
+      const tsToW = Number((await wrpc.call(() => wrpc.client.getBlock({ blockNumber: latestW }))).timestamp)
+      const interpW = (b: bigint) => tsFromW + Number(b - dayFromW) * (tsToW - tsFromW) / Number(latestW - dayFromW)
+      const { rpc: trpc, isAlchemy } = makeTraderRpc(usage); const SAMPLE = scoring.scan.wash_sample_swaps
+      const poolInfo = new Map((db.prepare('SELECT * FROM pools').all() as any[]).map(p => [p.pool_id, p] as [string, any]))
+      const th = scoring.exclusions; let washExcluded = 0
+      for (const id of topN) {
+        const p = poolInfo.get(id); if (!p) continue
+        try {
+          let swaps = await fetchSwaps(wrpc, id, dayFromW, latestW)
+          const lps = await fetchModifyLiquidity(wrpc, id, dayFromW, latestW)
+          const total = swaps.length; const sampled = swaps.length > SAMPLE; if (sampled) swaps = swaps.slice(-SAMPLE)   // DECISIONS D25：只取最新 N 筆
+          const fromMap = await resolveTxFrom(trpc, [...swaps.map(s => s.txHash), ...lps.map(l => l.txHash)])
+          const stockIs0 = !!p.stock_is_token0
+          const ws: WashSwap[] = swaps.map(s => {
+            const usdg = stockIs0 ? s.amount1 : s.amount0; const stock = stockIs0 ? s.amount0 : s.amount1
+            return { trader: fromMap.get(s.txHash) ?? s.sender, ts: Math.floor(interpW(s.blockNumber)), dir: stock < 0n ? 'buy' : 'sell', volumeUsd: Number(usdg < 0n ? -usdg : usdg) / 1e6 }
+          })
+          const m = analyzeWash(ws, new Set(lps.map(l => fromMap.get(l.txHash) ?? l.sender)))
+          const hit = m.top1Share > th.wash_top1_share || m.pingpongRatio > th.wash_pingpong_ratio || m.lpOverlapVolumeShare > th.wash_overlap_volume_share
+          const cur = simById.get(id)!; const flags = [...cur.flags.filter(f => f !== 'wash_suspect'), ...(hit ? ['wash_suspect'] : []), ...(sampled ? ['wash_sampled'] : [])]
+          if (hit) { washExcluded++; scores.delete(id) }
+          updateWash(db, id, date, m, flags, hit ? 1 : 0, sampled)
+          log(`wash ${id.slice(0, 10)}: swaps ${total}${sampled ? ` (sampled ${SAMPLE})` : ''}, lps ${lps.length}, traders ${m.traderCount}, top1 ${(m.top1Share * 100).toFixed(0)}%, pingpong ${(m.pingpongRatio * 100).toFixed(0)}%, lpOverlapVol ${(m.lpOverlapVolumeShare * 100).toFixed(0)}%${hit ? ' ⚠️ wash_suspect' : ''}`)
+        } catch (e) { log(`wash ${id.slice(0, 10)}: ${String((e as Error).message).split('\n')[0]}`) }
+      }
+      if (washExcluded) {   // 重新評分（被排除的不進百分位）
+        const remain = candRows.filter(r => scores.has(r.pool_id))
+        const re = scorePools(remain.map(r => ({ poolId: r.pool_id, sim: simById.get(r.pool_id)!.sim, vol7Cv: r.vol7_cv ?? 0, traderCount: (db.prepare('SELECT trader_count t FROM pool_snapshots WHERE pool_id=? AND date=?').get(r.pool_id, date) as any)?.t ?? null, priceDevPct: r.price_dev_pct, allDayTradable: r.all_day_tradable === 'tradable' })), scoring)
+        for (const [id, sc] of re) db.prepare('UPDATE pool_snapshots SET score=? WHERE pool_id=? AND date=?').run(sc, id, date)
+      }
+      log(`wash analysis on ${topN.length} pools, ${washExcluded} flagged wash_suspect (traders via ${isAlchemy ? 'alchemy' : 'public rpc'})`)
+    }
+    // 7. 摘要
     const today = db.prepare(`SELECT s.*, p.fee_ppm, t.symbol FROM pool_snapshots s JOIN pools p ON p.pool_id=s.pool_id
       JOIN tokens t ON t.address = CASE WHEN p.stock_is_token0=1 THEN p.token0 ELSE p.token1 END WHERE s.date=?`).all(date) as any[]
     const cands = today.filter(r => !r.excluded).sort((a, b) => (b.score ?? -1) - (a.score ?? -1))

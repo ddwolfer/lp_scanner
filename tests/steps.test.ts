@@ -34,6 +34,6 @@ it('loadHourly 丟掉開頭 null 價並升冪；updateSim 回寫', () => {
   writeHourly(db, '0x1', [{ ts: 3600, priceUsd: null, volumeUsd: 0, feesUsd: 0, liquidity: null, swapCount: 0 }, { ts: 7200, priceUsd: 10, volumeUsd: 1, feesUsd: 0.1, liquidity: '5', swapCount: 1 }, { ts: 10800, priceUsd: 11, volumeUsd: 0, feesUsd: 0, liquidity: '5', swapCount: 0 }])
   expect(loadHourly(db, '0x1')).toEqual([{ ts: 7200, priceUsd: 10, feesUsd: 0.1, liquidity: '5' }, { ts: 10800, priceUsd: 11, feesUsd: 0, liquidity: '5' }])
   writeSnapshot(db, snap('0x1', '2026-09-03', []))
-  updateSim(db, '0x1', '2026-09-03', { meta: {} } as any, 0.5, ['rvol_fallback'])
+  updateSim(db, '0x1', '2026-09-03', { meta: {} } as any, 0.5, ['rvol_fallback', 'rvol_fallback'])
   expect(db.prepare('SELECT score, flags, sim FROM pool_snapshots WHERE pool_id=? AND date=?').get('0x1', '2026-09-03')).toEqual({ score: 0.5, flags: '["rvol_fallback"]', sim: '{"meta":{}}' })
 })
