@@ -260,7 +260,7 @@ LP 地址數: 9，同時也在交易的 LP: 4  ⚠️
 |---|---|---|---|
 | C1 | 池子宇宙 | **只掃「股票代幣 × USDG」**，不含 WETH 配對 | `Initialize` 過濾只需 USDG 在 currency0 / currency1 兩種；`quote_kind` 第一版只會有 `usdg`，`eth` 分支保留欄位但不實作換算；不需要 ETH/USD 價格來源；WETH/USDG 池不進宇宙 |
 | C2 | `lp_trader_overlap` | 接受改為成交量佔比門檻 | `wash_suspect` 的第三條件改為「重疊 LP 地址的成交量佔比 > 0.5」，門檻放 `config/scoring.json`；`lp_trader_overlap` 仍記錄地址數 |
-| C3 | 截圖池 poolId | 同意提供，**尚未收到** | 收到後跑 `analyze-pool.mjs swaps <poolId> 830000` 並補記於 11.6 |
+| C3 | 截圖池 poolId | 已提供：`0xb6a881c32ed115cb8790c182580c71607ee7b7b008b4e1c3c65b1bc29b891b53`（SOFI/USDG v4 3.285%） | **與 11.6 我挑的成交量最大池相同**，11.6 的實跑結果即為截圖池的結果，不需重跑 |
 | C4 | Alchemy key / Telegram token | 之後補進 `.env` | P1 先用 public RPC；Telegram 推送在無 token 時改為印到 stdout 並記 `scan_runs.error = "telegram_not_configured"` |
 
 ## 原始待確認問題（已回覆，保留紀錄）
