@@ -115,7 +115,15 @@ Chain ID：RPC `eth_chainId` = `0x1237` = 4663 ✓。
 
 ---
 
-## 11.5 Alchemy 是否支援 4663、免費額度 getLogs 上限 → **支援；getLogs 範圍限制待 key 實測**
+## 11.5 Alchemy 是否支援 4663、免費額度 getLogs 上限 → **支援；免費方案 getLogs 只允許 10 個區塊（已實測）**
+
+**2026-09-03 實測（使用者提供 key，app 啟用 Robinhood Mainnet 後）**：`eth_blockNumber` 正常；`eth_getLogs` 任何超過 10 塊的範圍都回：
+
+```
+Under the Free tier plan, you can make eth_getLogs requests with up to a 10 block range. Upgrade to PAYG for expanded block range.
+```
+
+一天 83 萬塊 ÷ 10 = 83,000 次/池，完全不可行。**決策定案：log 一律走 public RPC；Alchemy 只保留給 `eth_call` / `getBlock` 備援**（目前程式未切換，public RPC 撐得住，見 11.7 補充）。
 
 - Alchemy 官方頁明列 Robinhood Chain mainnet：`https://robinhood-mainnet.g.alchemy.com/v2/<API_KEY>`，支援 RPC / Token / Transfers / Prices / Webhooks；**不支援** Debug / Trace。
 - 免費方案：**30M CU / 月**、500 CU/s、5 apps。`eth_getLogs` 約 60–75 CU/次 → 每日約 1M CU ≈ 13,000 次 getLogs 預算。
