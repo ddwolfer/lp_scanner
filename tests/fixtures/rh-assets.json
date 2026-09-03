@@ -1,0 +1,12 @@
+{"assets":[
+ {"id":"0x0000000000000000000000000000000000000000000000000000000000000001","tokenSymbol":"SOFI","tokenName":"SoFi Technologies • Robinhood Token",
+  "deployments":[{"contractAddress":"0x98E75885157C80992A8D41b696D8c9C6Fb30A926","chainId":4663,"networkName":"Robinhood Chain"}],
+  "currentMultiplier":"1.000000000000000000","pendingMultiplier":"","status":"ASSET_STATUS_ACTIVE","logoUrl":"",
+  "tradingCapabilities":{"market":{"whole":"TRADING_STATUS_TRADABLE","fractional":"TRADING_STATUS_TRADABLE"},"extended":{"whole":"TRADING_STATUS_TRADABLE","fractional":"TRADING_STATUS_TRADABLE"},"overnight":{"whole":"TRADING_STATUS_TRADABLE","fractional":"TRADING_STATUS_TRADABLE"}},
+  "tokenDecimals":18,"isin":"US83406F1021"},
+ {"id":"0x0000000000000000000000000000000000000000000000000000000000000002","tokenSymbol":"XYZ","tokenName":"XYZ • Robinhood Token",
+  "deployments":[{"contractAddress":"0x0000000000000000000000000000000000000ABC","chainId":4663,"networkName":"Robinhood Chain"}],
+  "currentMultiplier":"1.000000000000000000","pendingMultiplier":"","status":"ASSET_STATUS_ACTIVE","logoUrl":"",
+  "tradingCapabilities":{"market":{"whole":"TRADING_STATUS_TRADABLE","fractional":"TRADING_STATUS_TRADABLE"},"extended":{"whole":"TRADING_STATUS_NOT_TRADABLE","fractional":"TRADING_STATUS_NOT_TRADABLE"},"overnight":{"whole":"TRADING_STATUS_NOT_TRADABLE","fractional":"TRADING_STATUS_NOT_TRADABLE"}},
+  "tokenDecimals":18,"isin":"US0000000000"}
+]}
