@@ -11,6 +11,7 @@
     "typecheck": "tsc --noEmit",
     "scan": "tsx scanner/run.ts",
     "backfill": "tsx scripts/backfill-pools.ts",
+    "sim-check": "tsx scripts/sim-check.ts",
     "probe-alchemy": "tsx scripts/probe-alchemy.ts"
   },
   "dependencies": {

@@ -24,3 +24,9 @@ launchctl load ~/Library/LaunchAgents/com.lp-scanner.daily.plist
 ```
 pnpm test && pnpm typecheck
 ```
+
+## 人工核對模擬（P2 驗收，SPEC §7.4）
+```
+pnpm sim-check <poolId> [D=1000] [R=0.25] [from YYYY-MM-DD] [to YYYY-MM-DD]
+pnpm sim-check 0xb6a881c32ed115cb8790c182580c71607ee7b7b008b4e1c3c65b1bc29b891b53 1000 0.25
+```

@@ -59,3 +59,19 @@ export function recentVolumes(db: Database.Database, poolId: string, beforeDate:
 export function pruneHourly(db: Database.Database, keepDays = 45) {
   db.prepare('DELETE FROM pool_hourly WHERE ts < ?').run(Math.floor(Date.now() / 1000) - keepDays * 86400)
 }
+
+import type { SimHour, SimJson } from './metrics/simulate.js'
+/** 最近 maxHours 小時（預設 30 天）升冪；丟掉開頭無價格的列，之後無價格以前值填補 */
+export function loadHourly(db: Database.Database, poolId: string, maxHours = 720): SimHour[] {
+  const rows = (db.prepare('SELECT ts, price_usd, fees_usd, liquidity FROM pool_hourly WHERE pool_id=? ORDER BY ts DESC LIMIT ?').all(poolId, maxHours) as any[]).reverse()
+  const out: SimHour[] = []; let last: number | null = null
+  for (const r of rows) {
+    if (r.price_usd === null && last === null) continue
+    if (r.price_usd !== null) last = r.price_usd
+    out.push({ ts: r.ts, priceUsd: last!, feesUsd: r.fees_usd ?? 0, liquidity: r.liquidity ?? null })
+  }
+  return out
+}
+export function updateSim(db: Database.Database, poolId: string, date: string, sim: SimJson, score: number | null, flags: string[]) {
+  db.prepare('UPDATE pool_snapshots SET sim=?, score=?, flags=? WHERE pool_id=? AND date=?').run(JSON.stringify(sim), score, JSON.stringify(flags), poolId, date)
+}

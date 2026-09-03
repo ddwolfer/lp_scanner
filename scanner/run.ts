@@ -13,18 +13,22 @@ import { hardExclusions } from './metrics/exclusions.js'
 import { formatDailySummary } from './notify/summary.js'
 import { sendTelegram } from './notify/telegram.js'
 import { taipeiDate, isUsWeekday } from './time.js'
-import { upsertTokens, upsertPools, writeHourly, writeSnapshot, previousCandidates, recentVolumes, pruneHourly, isStockUsdgPool } from './steps.js'
+import { upsertTokens, upsertPools, writeHourly, writeSnapshot, previousCandidates, recentVolumes, pruneHourly, isStockUsdgPool, loadHourly, updateSim } from './steps.js'
+import { simulateAll, type SimJson } from './metrics/simulate.js'
+import { weeklySigma } from './metrics/volatility.js'
+import { scorePools, getSimField } from './metrics/score.js'
 
 const WEEKDAY_ZH = ['日', '一', '二', '三', '四', '五', '六']
 const STOCKISH = /^[A-Z]{1,5}$/
 const log = (m: string) => console.log(`[${new Date().toISOString()}] ${m}`)
 
-export async function runDaily(opts: { dbPath?: string; now?: Date } = {}) {
+export async function runDaily(opts: { dbPath?: string; now?: Date; simOnly?: boolean } = {}) {
   const now = opts.now ?? new Date(); const date = taipeiDate(now); const usage = new ApiUsage()
   const db = openDb(opts.dbPath ?? 'db/lp.sqlite'); const scoring = loadScoring()
   const runId = Number(db.prepare(`INSERT INTO scan_runs(started_at) VALUES (?)`).run(now.toISOString()).lastInsertRowid)
   let poolsScanned = 0, swapPools = 0
   try {
+    if (!opts.simOnly) {
     const rpc = makeRpc({ usage })
     // 1. 白名單與公司行動
     const assets = await fetchAssets({ usage }); upsertTokens(db, assets, now.toISOString()); log(`assets ${assets.length}`)
@@ -92,16 +96,30 @@ export async function runDaily(opts: { dbPath?: string; now?: Date } = {}) {
         flags, excluded: flags.some(f => f !== 'short_history' && f !== 'swap_fetch_failed') ? 1 : 0 })
       if (poolsScanned % 25 === 0) log(`pools ${poolsScanned}/${pools.length} (calls ${JSON.stringify(usage.toJSON())})`)
     }
-    // 5. 摘要
+    } else { poolsScanned = (db.prepare('SELECT COUNT(*) c FROM pool_snapshots WHERE date=?').get(date) as any).c; log(`sim-only: ${poolsScanned} snapshots for ${date}`) }
+    // 5. 模擬與評分（SPEC §7 / §8.3）：只對未硬排除的池（DECISIONS D22）
+    const candRows = db.prepare(`SELECT s.pool_id, s.flags, s.vol7_cv, s.trader_count, s.price_dev_pct, t.all_day_tradable FROM pool_snapshots s JOIN pools p ON p.pool_id=s.pool_id
+      JOIN tokens t ON t.address = CASE WHEN p.stock_is_token0=1 THEN p.token0 ELSE p.token1 END WHERE s.date=? AND s.excluded=0`).all(date) as any[]
+    const simById = new Map<string, { sim: SimJson; flags: string[] }>()
+    for (const r of candRows) {
+      const hours = loadHourly(db, r.pool_id)
+      const { sim, flags } = simulateAll(hours, weeklySigma(hours.map(h => h.priceUsd)))
+      simById.set(r.pool_id, { sim, flags: [...JSON.parse(r.flags), ...flags, 'sigma_from_pool'] })   // DECISIONS 11.3
+    }
+    const scores = scorePools(candRows.map(r => ({ poolId: r.pool_id, sim: simById.get(r.pool_id)!.sim, vol7Cv: r.vol7_cv ?? 0, traderCount: r.trader_count, priceDevPct: r.price_dev_pct, allDayTradable: r.all_day_tradable === 'tradable' })), scoring)
+    for (const [id, v] of simById) updateSim(db, id, date, v.sim, scores.get(id) ?? null, v.flags)
+    log(`simulated ${simById.size} candidate pools`)
+    // 6. 摘要
     const today = db.prepare(`SELECT s.*, p.fee_ppm, t.symbol FROM pool_snapshots s JOIN pools p ON p.pool_id=s.pool_id
       JOIN tokens t ON t.address = CASE WHEN p.stock_is_token0=1 THEN p.token0 ELSE p.token1 END WHERE s.date=?`).all(date) as any[]
-    const cands = today.filter(r => !r.excluded).sort((a, b) => (b.raw_apr ?? 0) - (a.raw_apr ?? 0))
+    const cands = today.filter(r => !r.excluded).sort((a, b) => (b.score ?? -1) - (a.score ?? -1))
     const prev = previousCandidates(db, date); const cur = new Set(cands.map(c => c.pool_id))
     const label = (r: any) => `${r.symbol}/USDG v4`
     const changes = [...today.filter(r => prev.has(r.pool_id) && !cur.has(r.pool_id)).map(r => ({ label: label(r), kind: 'dropped' as const, reason: JSON.parse(r.flags).join(',') })),
                      ...cands.filter(r => !prev.has(r.pool_id) && prev.size > 0).map(r => ({ label: label(r), kind: 'added' as const }))]
-    const text = formatDailySummary({ date, weekdayZh: WEEKDAY_ZH[new Date(date + 'T00:00:00+08:00').getDay()], poolsScanned, candidates: cands.length,
-      top: cands.slice(0, 5).map(r => ({ label: label(r), feePct: (r.fee_ppm / 1e4).toFixed(2) + '%', rawApr: r.raw_apr ?? 0, tvlUsd: r.tvl_usd ?? 0, traderCount: r.trader_count })), changes, positions: [] })
+    const text = formatDailySummary({ date, weekdayZh: WEEKDAY_ZH[new Date(date + 'T00:00:00+08:00').getDay()], poolsScanned, candidates: cands.length, sortKey: scoring.sort_key,
+      top: cands.slice(0, 5).map(r => { const sim = r.sim ? JSON.parse(r.sim) as SimJson : null
+        return { label: label(r), feePct: (r.fee_ppm / 1e4).toFixed(2) + '%', netApr: getSimField(sim, scoring.sort_key, 'net_apr'), inRangePct: getSimField(sim, scoring.sort_key, 'in_range_pct'), traderCount: r.trader_count } }), changes, positions: [] })
     console.log('\n' + text + '\n')
     const sent = await sendTelegram(text, { token: process.env.TELEGRAM_BOT_TOKEN, chatId: process.env.TELEGRAM_CHAT_ID, topicId: process.env.TELEGRAM_TOPIC_ID })
     pruneHourly(db)
@@ -114,4 +132,4 @@ export async function runDaily(opts: { dbPath?: string; now?: Date } = {}) {
   } finally { db.close() }
 }
 const isMain = process.argv[1] && import.meta.url.endsWith(process.argv[1].split('/').pop()!)
-if (isMain) runDaily().catch(e => { console.error(e); process.exit(1) })
+if (isMain) runDaily({ simOnly: process.argv.includes('--sim-only') }).catch(e => { console.error(e); process.exit(1) })
