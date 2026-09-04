@@ -195,7 +195,7 @@ export async function runDaily(opts: { dbPath?: string; now?: Date; simOnly?: bo
                      ...cands.filter(r => !prev.has(r.pool_id) && prev.size > 0).map(r => ({ label: label(r), kind: 'added' as const }))]
     const text = formatDailySummary({ date, weekdayZh: WEEKDAY_ZH[new Date(date + 'T00:00:00+08:00').getDay()], poolsScanned, candidates: cands.length, sortKey: scoring.sort_key,
       top: cands.slice(0, 5).map(r => { const sim = r.sim ? JSON.parse(r.sim) as SimJson : null
-        return { label: label(r), feePct: (r.fee_ppm / 1e4).toFixed(2) + '%', netApr: getSimField(sim, scoring.sort_key, 'net_apr'), inRangePct: getSimField(sim, scoring.sort_key, 'in_range_pct'), traderCount: r.trader_count } }), changes, positions: formatPositions(listPositions(db)) })
+        return { label: label(r), feePct: (r.fee_ppm / 1e4).toFixed(2) + '%', netApr: getSimField(sim, scoring.sort_key, 'net_apr'), inRangePct: getSimField(sim, scoring.sort_key, 'in_range_pct'), traderCount: r.trader_count } }), changes, positions: formatPositions(listPositions(db)), dashboardUrl: process.env.DASHBOARD_URL })
     console.log('\n' + text + '\n')
     const sent = await sendTelegram(text, { token: process.env.TELEGRAM_BOT_TOKEN, chatId: process.env.TELEGRAM_CHAT_ID, topicId: process.env.TELEGRAM_TOPIC_ID })
     pruneHourly(db)

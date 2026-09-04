@@ -4,13 +4,15 @@ import { sendTelegram } from '../scanner/notify/telegram.js'
 it('格式符合 §13', () => {
   const s = formatDailySummary({ date: '2026-09-10', weekdayZh: '三', poolsScanned: 312, candidates: 14, sortKey: 'd1000.r25',
     top: [{ label: 'SOFI/USDG v4', feePct: '3.29%', netApr: 4.12, inRangePct: 0.91, traderCount: 34 }],
-    changes: [{ label: 'IBM/USDG', kind: 'dropped', reason: 'corp_action_pending' }, { label: 'AAPL/USDG', kind: 'added' }], positions: [] })
+    changes: [{ label: 'IBM/USDG', kind: 'dropped', reason: 'corp_action_pending' }, { label: 'AAPL/USDG', kind: 'added' }], positions: ['SPY/USDG #1  實際 +$13.88 / 模擬 +$16.37 (6d)  在區間 ✓'], dashboardUrl: 'http://192.168.0.18:3000' })
   expect(s).toContain('📊 LP 掃描 2026-09-10 (三)')
   expect(s).toContain('掃描 312 池，候選 14')
   expect(s).toContain('Top 5 (投入 $1000, ±25%)')
   expect(s).toContain('1. SOFI/USDG v4 3.29%  net APR 412%  在區間 91%  交易者 34')
-  expect(s).toContain('- IBM/USDG 掉出候選: corp_action_pending')
-  expect(s).toContain('- AAPL/USDG 新進候選')
+  expect(s).not.toContain('異動')
+  expect(s).toContain('💼 我的頭寸\n- SPY/USDG #1')
+  expect(s.trim().endsWith('📈 http://192.168.0.18:3000')).toBe(true)
+  expect(formatDailySummary({ date: 'd', weekdayZh: '一', poolsScanned: 1, candidates: 0, sortKey: 'd1000.r25', top: [], changes: [], positions: [] })).not.toContain('我的頭寸')
 })
 it('沒有 token 時回 not_configured 且不打網路', async () => {
   const f = vi.fn(); expect(await sendTelegram('hi', {}, f)).toBe('not_configured'); expect(f).not.toHaveBeenCalled()
