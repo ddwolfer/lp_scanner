@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
-function useWidth() { const [w, setW] = useState(() => window.innerWidth); useEffect(() => { const f = () => setW(window.innerWidth); window.addEventListener('resize', f); return () => window.removeEventListener('resize', f) }, []); return w }
+// ?w=540 可強制模擬寬度（測試直式 + 200% 縮放用）
+const forcedW = Number(new URLSearchParams(window.location.search).get('w')) || 0
+function useWidth() { const [w, setW] = useState(() => forcedW || window.innerWidth); useEffect(() => { if (forcedW) return; const f = () => setW(window.innerWidth); window.addEventListener('resize', f); return () => window.removeEventListener('resize', f) }, []); return w }
 import { Link } from 'react-router-dom'
 import { api, fmtNum, fmtPct, fmtUsd, simOf, type Row } from '../api'
 import { FlagChips, PoolName, RankArrow, Seg } from '../components/bits'
