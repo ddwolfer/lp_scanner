@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-function useNarrow(bp = 1280) { const [n, setN] = useState(() => window.innerWidth < bp); useEffect(() => { const f = () => setN(window.innerWidth < bp); window.addEventListener('resize', f); return () => window.removeEventListener('resize', f) }, [bp]); return n }
+function useWidth() { const [w, setW] = useState(() => window.innerWidth); useEffect(() => { const f = () => setW(window.innerWidth); window.addEventListener('resize', f); return () => window.removeEventListener('resize', f) }, []); return w }
 import { Link } from 'react-router-dom'
 import { api, fmtNum, fmtPct, fmtUsd, simOf, type Row } from '../api'
 import { FlagChips, PoolName, RankArrow, Seg } from '../components/bits'
@@ -9,8 +9,9 @@ export default function Overview() {
   const [rows, setRows] = useState<Row[]>([]); const [D, setD] = useState('d1000'); const [R, setR] = useState('r25')
   const [all, setAll] = useState(false); const [sort, setSort] = useState<{ key: string; dir: 1 | -1 }>({ key: 'score', dir: -1 })
   const [err, setErr] = useState('')
-  const narrow = useNarrow(); const [layout, setLayout] = useState<'auto' | 'full' | 'compact'>('auto')
-  const compact = layout === 'auto' ? narrow : layout === 'compact'
+  const width = useWidth(); const [layout, setLayout] = useState<'auto' | 'full' | 'compact'>('auto')
+  const compact = layout === 'auto' ? width < 1280 : layout === 'compact'
+  const tight = compact && width < 720   // 直式螢幕 + 瀏覽器 200% 縮放：CSS 寬度只剩 ~540px，只留三欄
   useEffect(() => { api<string[]>('/api/dates').then(d => { setDates(d); setDate(d[0] ?? '') }).catch(e => setErr(String(e))) }, [])
   useEffect(() => { if (!date) return; api<{ rows: Row[] }>(`/api/overview?date=${date}`).then(r => setRows(r.rows)).catch(e => setErr(String(e))) }, [date])
   const cols: Col[] = useMemo(() => [
@@ -48,19 +49,19 @@ export default function Overview() {
       <span><label>版面</label><Seg value={layout} onChange={v => setLayout(v as any)} options={[['auto', '自動'], ['full', '完整'], ['compact', '精簡']]} /></span>
       {err && <span className="neg">{err}</span>}
     </div>
-    {compact ? <div className="tablewrap"><table className="grid compact">
+    {compact ? <div className="tablewrap"><table className={'grid compact' + (tight ? ' tight' : '')}>
       <thead><tr>
-        {(['rank_today', 'arrow', 'symbol', 'net_apr', 'in_range', 'score'] as const).map(k => { const c = cols.find(x => x.key === k)!; return <th key={k} className={(c.left ? 'l ' : '') + (sort.key === k ? 'sorted' : '')} onClick={() => setSort(s => ({ key: k, dir: s.key === k ? (s.dir === 1 ? -1 : 1) : -1 }))}>{c.label}{sort.key === k ? (sort.dir === -1 ? ' ▼' : ' ▲') : ''}</th> })}
+        {(tight ? ['rank_today', 'symbol', 'net_apr'] as const : ['rank_today', 'arrow', 'symbol', 'net_apr', 'in_range', 'score'] as const).map(k => { const c = cols.find(x => x.key === k)!; return <th key={k} className={(c.left ? 'l ' : '') + (sort.key === k ? 'sorted' : '')} onClick={() => setSort(s => ({ key: k, dir: s.key === k ? (s.dir === 1 ? -1 : 1) : -1 }))}>{tight && k === 'net_apr' ? 'net APR · 在區間 · score' : c.label}{sort.key === k ? (sort.dir === -1 ? ' ▼' : ' ▲') : ''}</th> })}
       </tr></thead>
       <tbody>{shown.map(r => { const sm = simOf(r, D, R); return <tr key={r.pool_id} className={r.excluded ? 'excluded' : ''}>
-        <td className="num">{r.rank_today ?? '—'}</td>
-        <td><RankArrow today={r.rank_today} prev={r.rank_prev} /></td>
+        <td className="num">{r.rank_today ?? '—'}{tight && <span className="sub"><RankArrow today={r.rank_today} prev={r.rank_prev} /></span>}</td>
+        {!tight && <td><RankArrow today={r.rank_today} prev={r.rank_prev} /></td>}
         <td className="l"><Link to={`/pool/${r.pool_id}`}><PoolName symbol={r.symbol} fee_ppm={r.fee_ppm} hooks={r.hooks} protocol={r.protocol} /></Link>
           <span className="sub">TVL <b>{fmtUsd(r.tvl_usd)}</b> · 7日量 <b>{fmtUsd(r.vol7_avg_usd)}</b> · CV {fmtNum(r.vol7_cv, 2)} · 交易者 <b>{r.trader_count ?? '—'}</b> · top1 {fmtPct(r.top1_share)} · 偏離 <span className={r.price_dev_pct !== null && Math.abs(r.price_dev_pct) > 0.03 ? 'warn' : ''}>{fmtPct(r.price_dev_pct, 1)}</span> · 原始 {fmtPct(r.raw_apr)} <FlagChips flags={r.flags} max={3} /></span>
         </td>
-        <td className={'num ' + (sm ? (sm.net_apr >= 0 ? 'pos' : 'neg') : '')}>{fmtPct(sm?.net_apr ?? null)}<span className="sub">淨 {fmtUsd(sm?.net_usd ?? null, 1)}</span></td>
-        <td className="num">{fmtPct(sm?.in_range_pct ?? null)}</td>
-        <td className="num">{fmtNum(r.score, 3)}</td>
+        <td className={'num ' + (sm ? (sm.net_apr >= 0 ? 'pos' : 'neg') : '')}>{fmtPct(sm?.net_apr ?? null)}<span className="sub">淨 {fmtUsd(sm?.net_usd ?? null, 1)}{tight && <> · 區間 <b>{fmtPct(sm?.in_range_pct ?? null)}</b> · <b>{fmtNum(r.score, 3)}</b></>}</span></td>
+        {!tight && <td className="num">{fmtPct(sm?.in_range_pct ?? null)}</td>}
+        {!tight && <td className="num">{fmtNum(r.score, 3)}</td>}
       </tr> })}</tbody>
     </table></div> : <div className="tablewrap">    <table className="grid">
       <thead><tr>{cols.map(c => <th key={c.key} className={(c.left ? 'l ' : '') + (sort.key === c.key ? 'sorted' : '')} onClick={() => setSort(s => ({ key: c.key, dir: s.key === c.key ? (s.dir === 1 ? -1 : 1) : -1 }))}>{c.label}{sort.key === c.key ? (sort.dir === -1 ? ' ▼' : ' ▲') : ''}</th>)}</tr></thead>
