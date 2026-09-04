@@ -10,7 +10,7 @@ import { registerApi } from './api.js'
 const root = path.dirname(fileURLToPath(import.meta.url))
 const dist = path.join(root, '..', 'web', 'dist')
 const db = openDb(path.join(root, '..', 'db', 'lp.sqlite'))
-const app = Fastify({ logger: { level: 'warn' } })
+const app = Fastify({ logger: { level: 'warn' }, bodyLimit: 30 * 1024 * 1024 })   // 日誌截圖 base64
 registerApi(app, db)
 if (existsSync(dist)) {
   await app.register(fastifyStatic, { root: dist, prefix: '/' })
