@@ -23,7 +23,8 @@ import { fetchModifyLiquidity } from './sources/uniswapV4.js'
 import { makeTraderRpc, resolveTxFrom } from './sources/traders.js'
 import { updateWash } from './steps.js'
 import { listPositions } from '../server/queries.js'
-import { lastKnownTvl } from './steps.js'
+import { lastKnownTvl, backfillHookInfo } from './steps.js'
+import { median } from './metrics/hooks.js'
 import { runPositionsStage } from './positionsStage.js'
 
 const WEEKDAY_ZH = ['日', '一', '二', '三', '四', '五', '六']
@@ -57,6 +58,7 @@ export async function runDaily(opts: { dbPath?: string; now?: Date; simOnly?: bo
     log(`discovery ${from}→${latest}: ${found.length} usdg pools (v3 ${found.filter(f => f.protocol === 'v3').length}), ${upsertPools(db, found, stockSet, blockTs)} new stock pools`)
     setMeta(db, 'last_discovery_block', latest.toString())
     // 3. TVL（DexScreener）與參考價（Robinhood）
+    { const n = backfillHookInfo(db); if (n) log(`hook info backfilled for ${n} pools`) }
     const pools = db.prepare('SELECT * FROM pools').all() as any[]
     const stockAddrsWithPools = [...new Set<string>(pools.map(p => p.stock_is_token0 ? p.token0 : p.token1))]
     const tvlByPool = new Map<string, number | null>(); const quoteBySymbol = new Map<string, RhQuote | null>()
@@ -75,15 +77,17 @@ export async function runDaily(opts: { dbPath?: string; now?: Date; simOnly?: bo
     for (const p of pools) {
       poolsScanned++
       const stockAddr: string = p.stock_is_token0 ? p.token0 : p.token1; const asset = stockByAddr.get(stockAddr)
-      const feeOk = p.fee_ppm !== null && p.fee_ppm >= scoring.exclusions.fee_ppm_min && p.fee_ppm <= scoring.exclusions.fee_ppm_max
+      const hookKind: 'none' | 'fee_only' | 'liquidity' = p.hook_kind ?? (p.hooks === ADDR.zero ? 'none' : 'liquidity')
+      // 動態費率池（fee_ppm NULL）在純費率 hook 下先拉 swap，用觀察到的中位數當費率（D36）
+      const feeOk = p.fee_ppm === null ? hookKind === 'fee_only' : (p.fee_ppm >= scoring.exclusions.fee_ppm_min && p.fee_ppm <= scoring.exclusions.fee_ppm_max)
       let tvl = tvlByPool.get(p.pool_id) ?? null; let tvlStale = false
       if (tvl === null) { const prevTvl = lastKnownTvl(db, p.pool_id, date); if (prevTvl !== null) { tvl = prevTvl; tvlStale = true } }   // DECISIONS D31：來源缺漏時沿用前值
       // DECISIONS D16：只對無 hooks、費率合理、DexScreener TVL ≥ 門檻的池拉 Swap（其餘必被硬排除）
-      const worth = p.hooks === ADDR.zero && feeOk && tvl !== null && tvl >= scoring.scan.swap_fetch_min_tvl_usd
+      const worth = hookKind !== 'liquidity' && feeOk && tvl !== null && tvl >= scoring.scan.swap_fetch_min_tvl_usd
       if (worth) swapPools++
-      let hourly: ReturnType<typeof aggregateHourly> = []; let swapFetchFailed = false
+      let hourly: ReturnType<typeof aggregateHourly> = []; let swapFetchFailed = false; let feeObserved: number | null = null
       if (worth) {
-        try { const sw = p.protocol === 'v3' ? await fetchV3Swaps(rpc, p.pool_id, p.fee_ppm, dayFrom, latest) : await fetchSwaps(rpc, p.pool_id, dayFrom, latest); hourly = aggregateHourly(sw, interp, !!p.stock_is_token0, tsFrom, tsTo) }
+        try { const sw = p.protocol === 'v3' ? await fetchV3Swaps(rpc, p.pool_id, p.fee_ppm, dayFrom, latest) : await fetchSwaps(rpc, p.pool_id, dayFrom, latest); hourly = aggregateHourly(sw, interp, !!p.stock_is_token0, tsFrom, tsTo); feeObserved = median(sw.map(x => x.fee)) }
         catch (e) { swapFetchFailed = true; log(`swaps ${p.pool_id.slice(0, 10)}: ${String((e as Error).message).split('\n')[0]}`) }
       }
       if (hourly.length) writeHourly(db, p.pool_id, hourly)
@@ -94,7 +98,8 @@ export async function runDaily(opts: { dbPath?: string; now?: Date; simOnly?: bo
       const v7 = vol7([...recentVolumes(db, p.pool_id, date), volume])
       const caRow = asset ? (nextCa.get(stockAddr, date) as { e: string | null })?.e : null
       const caDays = caRow ? ageDays(date, caRow) : null
-      const flags = hardExclusions({ stockAddress: asset ? stockAddr : null, otherIsUsdg: true, symbolLooksLikeStock: STOCKISH.test(asset?.tokenSymbol ?? ''), hooks: p.hooks, feePpm: p.fee_ppm,
+      const effectiveFee: number | null = p.fee_ppm ?? feeObserved   // 動態費率池：觀察不到就 null → fee_out_of_range
+      const flags = hardExclusions({ stockAddress: asset ? stockAddr : null, otherIsUsdg: true, symbolLooksLikeStock: STOCKISH.test(asset?.tokenSymbol ?? ''), hooks: p.hooks, hookKind, feePpm: effectiveFee,
         ageDays: age, tvlUsd: tvl, pendingMultiplier: asset?.pendingMultiplier ?? '', corpActionDaysAhead: caDays, isTradingHalt: quote?.isTradingHalt ?? null,
         rhStatus: asset?.status ?? null, wash: null, quoteKind: 'usdg' }, scoring.exclusions)
       if (v7.shortHistory) flags.push('short_history')
@@ -102,8 +107,8 @@ export async function runDaily(opts: { dbPath?: string; now?: Date; simOnly?: bo
       if (tvlStale) flags.push('tvl_stale')
       writeSnapshot(db, { pool_id: p.pool_id, date, is_weekday: isUsWeekday(now) ? 1 : 0, tvl_usd: tvl, volume_24h_usd: volume, fees_24h_usd: fees, price_usd: lastPrice,
         price_ref_usd: quote?.mid ?? null, price_dev_pct: lastPrice !== null ? priceDevPct(lastPrice, quote?.mid ?? null, Number(asset?.currentMultiplier ?? 1)) : null,
-        swap_count: swaps, age_days: age, vol7_avg_usd: v7.avg, vol7_cv: v7.cv, raw_apr: tvl && tvl > 0 ? fees * 365 / tvl : null,
-        flags, excluded: flags.some(f => !['short_history', 'swap_fetch_failed', 'tvl_stale'].includes(f)) ? 1 : 0 })
+        swap_count: swaps, fee_ppm_observed: feeObserved, age_days: age, vol7_avg_usd: v7.avg, vol7_cv: v7.cv, raw_apr: tvl && tvl > 0 ? fees * 365 / tvl : null,
+        flags, excluded: flags.some(f => !['short_history', 'swap_fetch_failed', 'tvl_stale', 'hook_fee_only'].includes(f)) ? 1 : 0 })
       if (poolsScanned % 25 === 0) log(`pools ${poolsScanned}/${pools.length} (calls ${JSON.stringify(usage.toJSON())})`)
     }
     } else { poolsScanned = (db.prepare('SELECT COUNT(*) c FROM pool_snapshots WHERE date=?').get(date) as any).c; log(`sim-only: ${poolsScanned} snapshots for ${date}`) }
@@ -169,7 +174,7 @@ export async function runDaily(opts: { dbPath?: string; now?: Date; simOnly?: bo
                      ...cands.filter(r => !prev.has(r.pool_id) && prev.size > 0).map(r => ({ label: label(r), kind: 'added' as const }))]
     const text = formatDailySummary({ date, weekdayZh: WEEKDAY_ZH[new Date(date + 'T00:00:00+08:00').getDay()], poolsScanned, candidates: cands.length, sortKey: scoring.sort_key,
       top: cands.slice(0, 5).map(r => { const sim = r.sim ? JSON.parse(r.sim) as SimJson : null
-        return { label: label(r), feePct: (r.fee_ppm / 1e4).toFixed(2) + '%', netApr: getSimField(sim, scoring.sort_key, 'net_apr'), inRangePct: getSimField(sim, scoring.sort_key, 'in_range_pct'), traderCount: r.trader_count } }), changes, positions: formatPositions(listPositions(db)), dashboardUrl: process.env.DASHBOARD_URL })
+        return { label: label(r), feePct: r.fee_ppm !== null ? (r.fee_ppm / 1e4).toFixed(2) + '%' : r.fee_ppm_observed !== null ? '~' + (r.fee_ppm_observed / 1e4).toFixed(2) + '%' : '動態', netApr: getSimField(sim, scoring.sort_key, 'net_apr'), inRangePct: getSimField(sim, scoring.sort_key, 'in_range_pct'), traderCount: r.trader_count } }), changes, positions: formatPositions(listPositions(db)), dashboardUrl: process.env.DASHBOARD_URL })
     console.log('\n' + text + '\n')
     const sent = await sendTelegram(text, { token: process.env.TELEGRAM_BOT_TOKEN, chatId: process.env.TELEGRAM_CHAT_ID, topicId: process.env.TELEGRAM_TOPIC_ID })
     pruneHourly(db)

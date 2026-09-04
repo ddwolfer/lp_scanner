@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis, Legend, ReferenceDot } from 'recharts'
-import { api, fmtNum, fmtPct, fmtUsd, ZERO } from '../api'
+import { api, fmtNum, fmtPct, fmtUsd, ZERO, HOOK_ZH, HOOK_GROUPS, feeLabel } from '../api'
 import { FlagChips } from '../components/bits'
 const tsFmt = (t: number) => new Date(t * 1000).toISOString().slice(5, 16).replace('T', ' ')
 const C = { tvl: '#6db3f2', vol: '#f2b135', fee: '#4fd18b', pool: '#f2b135', ref: '#98a1ad', r10: '#f0625d', r25: '#f2b135', rvol: '#4fd18b' }
@@ -10,14 +10,15 @@ export default function Pool() {
   useEffect(() => { api<any>(`/api/pool/${id}`).then(setD).catch(e => setErr(String(e))) }, [id])
   if (err) return <p className="neg">{err}</p>
   if (!d) return <p className="muted">載入中…</p>
-  const { pool, snapshots, hourly, curves, corporateActions, latest } = d
+  const { pool, snapshots, hourly, curves, corporateActions, latest, feeStats } = d
+  const hookKind: string = pool.hook_kind ?? (pool.hooks === ZERO ? 'none' : 'liquidity'); const hookFlags: string[] = pool.hook_flags ?? []
   const sim = latest?.sim; const wash = latest?.wash_detail
   const pending = corporateActions.filter((c: any) => c.status.includes('IN_PROGRESS'))
   const merged = curves ? curves.r25.map((p: any, i: number) => ({ ts: p.ts, r10: curves.r10[i]?.net, r25: p.net, rvol: curves.rvol[i]?.net })) : []
   const exits: { k: "r10" | "r25" | "rvol"; ts: number; net: number }[] = curves ? (['r10', 'r25', 'rvol'] as const).flatMap(k => curves[k].filter((p: any, i: number) => i > 0 && curves[k][i - 1].inRange && !p.inRange).map((p: any) => ({ k, ts: p.ts, net: p.net }))) : []
   return <>
     <p className="muted"><Link to="/">← 總覽</Link></p>
-    <h1><span className="sym">{pool.symbol}</span>/USDG <span className="chip">{pool.protocol}</span> <span className="chip num">{pool.fee_ppm === null ? '動態費率' : (pool.fee_ppm / 1e4).toFixed(3) + '%'}</span>{pool.hooks !== ZERO && <span className="chip hooks">hooks {pool.hooks.slice(0, 10)}</span>}</h1>
+    <h1><span className="sym">{pool.symbol}</span>/USDG <span className="chip">{pool.protocol}</span> <span className="chip num">{feeLabel(pool.fee_ppm, latest?.fee_ppm_observed ?? null)}</span>{hookKind === 'fee_only' && <span className="chip hooks">hook·費率</span>}{hookKind === 'liquidity' && <span className="chip bad">hook·流動性</span>}</h1>
     <div className="muted num" style={{ fontSize: 14 }}>{pool.pool_id}</div>
     {pending.length > 0 && <div className="alert">⚠️ 公司行動進行中：{pending.map((c: any) => `${c.type.replace('CORPORATE_ACTION_TYPE_', '')} ${c.effective_at}`).join('、')}</div>}
     <div className="cards" style={{ marginTop: 10 }}>
@@ -37,6 +38,13 @@ export default function Pool() {
         </tbody></table> : <span className="muted">未模擬（被硬排除或無資料）</span>}
       </div>
     </div>
+    {hookKind !== 'none' && <div className="card" style={{ marginTop: 12 }}>
+      <h2 style={{ margin: '0 0 6px' }}>Hook <span className="muted num" style={{ textTransform: 'none', letterSpacing: 0 }}>{pool.hooks}</span></h2>
+      <div style={{ marginBottom: 8 }}>{hookKind === 'fee_only' ? <span className="pos">純費率 hook：只能改每筆交易的費率或拒絕交易，碰不到你的本金，隨時可撤資。風險是費率被改成 0 或交易被凍結（賺不到，不是拿不回）。</span> : <span className="neg">流動性 hook：有權介入加減流動性或改帳，可能擋你進出或抽取金額。系統一律排除。</span>}</div>
+      <div className="charts">{HOOK_GROUPS.map(g => <div key={g.zh}><div className="muted" style={{ fontSize: 13, marginBottom: 4 }}>{g.zh} <span className="chip">{g.note}</span></div>
+        {g.keys.map(k => <div key={k} style={{ fontSize: 15, lineHeight: 1.7 }}><span className={hookFlags.includes(k) ? (g.keys === HOOK_GROUPS[0].keys ? 'warn' : 'neg') : 'muted'}>{hookFlags.includes(k) ? '✓' : '·'} {HOOK_ZH[k]}</span></div>)}</div>)}</div>
+      {pool.fee_ppm === null && <div className="muted" style={{ marginTop: 8 }}>動態費率，今日觀察：中位數 {latest?.fee_ppm_observed !== null && latest?.fee_ppm_observed !== undefined ? (latest.fee_ppm_observed / 1e4).toFixed(2) + '%' : '—'}{feeStats?.mn ? `，範圍 ${(feeStats.mn * 100).toFixed(2)}% 到 ${(feeStats.mx * 100).toFixed(2)}%（由小時手續費 ÷ 成交量估）` : ''}</div>}
+    </div>}
     <h2>30 天 TVL / 成交量 / 手續費</h2>
     <div className="charts">
       <div className="chart"><div className="t">每日快照</div><ResponsiveContainer width="100%" height={220}><LineChart data={snapshots}><CartesianGrid stroke="#262b34" /><XAxis dataKey="date" tickFormatter={v => v.slice(5)} /><YAxis yAxisId="l" width={60} tickFormatter={v => '$' + (v / 1000).toFixed(0) + 'k'} /><YAxis yAxisId="r" orientation="right" width={50} tickFormatter={v => '$' + v.toFixed(0)} /><Tooltip /><Legend />

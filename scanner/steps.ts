@@ -4,6 +4,7 @@ import { ADDR, USDG_DECIMALS } from '../config/chain.js'
 import type { RhAsset } from './sources/robinhood.js'
 import type { DiscoveredPool } from './sources/uniswapV4.js'
 import type { HourlyRow } from './metrics/hourly.js'
+import { hookInfo } from './metrics/hooks.js'
 
 export function upsertTokens(db: Database.Database, assets: RhAsset[], now: string) {
   const st = db.prepare(`INSERT INTO tokens(address,symbol,name,decimals,kind,rh_asset_id,rh_status,all_day_tradable,current_multiplier,raw,first_seen)
@@ -22,13 +23,14 @@ export function isStockUsdgPool(p: { currency0: string; currency1: string }, sto
   return null
 }
 export function upsertPools(db: Database.Database, pools: DiscoveredPool[], stockSet: Set<string>, blockTs: Map<string, string>): number {
-  const st = db.prepare(`INSERT OR IGNORE INTO pools(pool_id,protocol,token0,token1,fee_ppm,tick_spacing,hooks,created_block,created_at,quote_kind,stock_is_token0)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?)`)
+  const st = db.prepare(`INSERT OR IGNORE INTO pools(pool_id,protocol,token0,token1,fee_ppm,tick_spacing,hooks,created_block,created_at,quote_kind,stock_is_token0,hook_kind,hook_flags)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`)
   let n = 0
   db.transaction(() => {
     for (const p of pools) {
       const side = isStockUsdgPool(p, stockSet); if (!side) continue
-      const r = st.run(p.poolId, p.protocol ?? 'v4', p.currency0, p.currency1, p.feePpm, p.tickSpacing, p.hooks, Number(p.createdBlock), blockTs.get(p.createdBlock.toString()) ?? null, 'usdg', side === 'token0' ? 1 : 0)
+      const h = hookInfo(p.hooks)
+      const r = st.run(p.poolId, p.protocol ?? 'v4', p.currency0, p.currency1, p.feePpm, p.tickSpacing, p.hooks, Number(p.createdBlock), blockTs.get(p.createdBlock.toString()) ?? null, 'usdg', side === 'token0' ? 1 : 0, h.kind, JSON.stringify(h.flags))
       n += r.changes
     }
   })()
@@ -40,13 +42,13 @@ export function writeHourly(db: Database.Database, poolId: string, rows: HourlyR
 }
 export interface SnapshotRow {
   pool_id: string; date: string; is_weekday: number; tvl_usd: number | null; volume_24h_usd: number; fees_24h_usd: number
-  price_usd: number | null; price_ref_usd: number | null; price_dev_pct: number | null; swap_count: number
+  price_usd: number | null; price_ref_usd: number | null; price_dev_pct: number | null; swap_count: number; fee_ppm_observed?: number | null
   age_days: number | null; vol7_avg_usd: number; vol7_cv: number; raw_apr: number | null; flags: string[]; excluded: number
 }
 export function writeSnapshot(db: Database.Database, r: SnapshotRow) {
-  db.prepare(`INSERT OR REPLACE INTO pool_snapshots(pool_id,date,is_weekday,tvl_usd,volume_24h_usd,fees_24h_usd,price_usd,price_ref_usd,price_dev_pct,swap_count,age_days,vol7_avg_usd,vol7_cv,raw_apr,flags,excluded)
-    VALUES (@pool_id,@date,@is_weekday,@tvl_usd,@volume_24h_usd,@fees_24h_usd,@price_usd,@price_ref_usd,@price_dev_pct,@swap_count,@age_days,@vol7_avg_usd,@vol7_cv,@raw_apr,@flags,@excluded)`)
-    .run({ ...r, flags: JSON.stringify(r.flags) })
+  db.prepare(`INSERT OR REPLACE INTO pool_snapshots(pool_id,date,is_weekday,tvl_usd,volume_24h_usd,fees_24h_usd,price_usd,price_ref_usd,price_dev_pct,swap_count,fee_ppm_observed,age_days,vol7_avg_usd,vol7_cv,raw_apr,flags,excluded)
+    VALUES (@pool_id,@date,@is_weekday,@tvl_usd,@volume_24h_usd,@fees_24h_usd,@price_usd,@price_ref_usd,@price_dev_pct,@swap_count,@fee_ppm_observed,@age_days,@vol7_avg_usd,@vol7_cv,@raw_apr,@flags,@excluded)`)
+    .run({ fee_ppm_observed: null, ...r, flags: JSON.stringify(r.flags) })
 }
 export function previousCandidates(db: Database.Database, date: string): Set<string> {
   const prev = db.prepare('SELECT MAX(date) d FROM pool_snapshots WHERE date < ?').get(date) as { d: string | null }
@@ -131,4 +133,12 @@ export function setPositionOrigin(db: Database.Database, id: number, openedAtIso
 export function lastKnownTvl(db: Database.Database, poolId: string, beforeDate: string): number | null {
   const r = db.prepare('SELECT tvl_usd FROM pool_snapshots WHERE pool_id=? AND date<? AND tvl_usd IS NOT NULL ORDER BY date DESC LIMIT 1').get(poolId, beforeDate) as { tvl_usd: number } | undefined
   return r?.tvl_usd ?? null
+}
+
+/** 既有池補上 hook 分類（一次性；新池在 upsertPools 就有） */
+export function backfillHookInfo(db: Database.Database): number {
+  const rows = db.prepare('SELECT pool_id, hooks FROM pools WHERE hook_kind IS NULL').all() as { pool_id: string; hooks: string }[]
+  const st = db.prepare('UPDATE pools SET hook_kind=?, hook_flags=? WHERE pool_id=?')
+  db.transaction(() => { for (const r of rows) { const h = hookInfo(r.hooks); st.run(h.kind, JSON.stringify(h.flags), r.pool_id) } })()
+  return rows.length
 }

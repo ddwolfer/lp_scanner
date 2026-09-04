@@ -13,7 +13,7 @@ export function getDates(db: Database.Database): string[] {
   return (db.prepare('SELECT DISTINCT date FROM pool_snapshots ORDER BY date DESC').all() as { date: string }[]).map(r => r.date)
 }
 export interface OverviewRow {
-  pool_id: string; symbol: string; protocol: string; fee_ppm: number | null; hooks: string; age_days: number | null
+  pool_id: string; symbol: string; protocol: string; fee_ppm: number | null; fee_ppm_observed: number | null; hooks: string; hook_kind: string | null; hook_flags: string[]; age_days: number | null
   tvl_usd: number | null; volume_24h_usd: number; fees_24h_usd: number; vol7_avg_usd: number; vol7_cv: number
   trader_count: number | null; top1_share: number | null; price_usd: number | null; price_ref_usd: number | null; price_dev_pct: number | null
   raw_apr: number | null; score: number | null; excluded: number; flags: string[]; sim: any; all_day_tradable: string | null
@@ -26,9 +26,9 @@ function rankMap(db: Database.Database, date: string): Map<string, number> {
 export function getOverview(db: Database.Database, date: string): OverviewRow[] {
   const prevDate = (db.prepare('SELECT MAX(date) d FROM pool_snapshots WHERE date < ?').get(date) as { d: string | null }).d
   const today = rankMap(db, date); const prev = prevDate ? rankMap(db, prevDate) : new Map<string, number>()
-  const rows = db.prepare(`SELECT s.pool_id, t.symbol, p.protocol, p.fee_ppm, p.hooks, s.age_days, s.tvl_usd, s.volume_24h_usd, s.fees_24h_usd, s.vol7_avg_usd, s.vol7_cv,
+  const rows = db.prepare(`SELECT s.pool_id, t.symbol, p.protocol, p.fee_ppm, s.fee_ppm_observed, p.hooks, p.hook_kind, p.hook_flags, s.age_days, s.tvl_usd, s.volume_24h_usd, s.fees_24h_usd, s.vol7_avg_usd, s.vol7_cv,
       s.trader_count, s.top1_share, s.price_usd, s.price_ref_usd, s.price_dev_pct, s.raw_apr, s.score, s.excluded, s.flags, s.sim, t.all_day_tradable ${POOL_JOIN} WHERE s.date=?`).all(date) as any[]
-  return rows.map(r => ({ ...r, flags: parse(r.flags) ?? [], sim: parse(r.sim), rank_today: today.get(r.pool_id) ?? null, rank_prev: prev.get(r.pool_id) ?? null }))
+  return rows.map(r => ({ ...r, flags: parse(r.flags) ?? [], hook_flags: parse(r.hook_flags) ?? [], sim: parse(r.sim), rank_today: today.get(r.pool_id) ?? null, rank_prev: prev.get(r.pool_id) ?? null }))
 }
 export function getPool(db: Database.Database, poolId: string) {
   const pool = db.prepare(`SELECT p.*, t.symbol, t.name AS token_name, t.rh_status, t.all_day_tradable, t.current_multiplier, t.address AS stock_address FROM pools p
@@ -43,7 +43,8 @@ export function getPool(db: Database.Database, poolId: string) {
   const curve = (R: number) => simulateHourly(simHours, 1000, R).map(r => ({ ts: r.row.ts, net: r.cumFees + r.valueH - 1000, inRange: r.inRange }))
   const curves = simHours.length ? { r10: curve(0.10), r25: curve(0.25), rvol: curve(rvolR) } : null
   const corporateActions = db.prepare('SELECT * FROM corporate_actions WHERE token=? ORDER BY effective_at DESC').all(pool.stock_address)
-  return { pool, snapshots, hourly, curves, corporateActions, latest }
+  const feeStats = latest ? (db.prepare('SELECT MIN(fees_usd/NULLIF(volume_usd,0)) mn, MAX(fees_usd/NULLIF(volume_usd,0)) mx FROM pool_hourly WHERE pool_id=? AND ts>=? AND volume_usd>0').get(poolId, Math.floor(Date.now() / 1000) - 86400) as any) : null
+  return { pool: { ...pool, hook_flags: parse(pool.hook_flags) ?? [] }, snapshots, hourly, curves, corporateActions, latest, feeStats }
 }
 export interface PositionInput { pool_id: string; label: string; range_lower: number; range_upper: number; deposit_usd: number; opened_at: string; notes?: string }
 export function createPosition(db: Database.Database, i: PositionInput): number {

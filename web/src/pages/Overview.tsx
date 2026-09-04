@@ -4,12 +4,13 @@ const forcedW = Number(new URLSearchParams(window.location.search).get('w')) || 
 function useWidth() { const [w, setW] = useState(() => forcedW || window.innerWidth); useEffect(() => { if (forcedW) return; const f = () => setW(window.innerWidth); window.addEventListener('resize', f); return () => window.removeEventListener('resize', f) }, []); return w }
 import { Link } from 'react-router-dom'
 import { api, fmtNum, fmtPct, fmtUsd, simOf, type Row } from '../api'
+const ZERO_ADDR = '0x0000000000000000000000000000000000000000'
 import { FlagChips, PoolName, RankArrow, Seg } from '../components/bits'
 type Col = { key: string; label: string; get: (r: Row) => number | string | null; cls?: (v: any, r: Row) => string; fmt?: (v: any) => string; left?: boolean }
 export default function Overview() {
   const [dates, setDates] = useState<string[]>([]); const [date, setDate] = useState<string>('')
   const [rows, setRows] = useState<Row[]>([]); const [D, setD] = useState('d1000'); const [R, setR] = useState('r25')
-  const [all, setAll] = useState(false); const [sort, setSort] = useState<{ key: string; dir: 1 | -1 }>({ key: 'score', dir: -1 })
+  const [all, setAll] = useState(false); const [hookF, setHookF] = useState<'all' | 'none' | 'fee_only'>('all'); const [sort, setSort] = useState<{ key: string; dir: 1 | -1 }>({ key: 'score', dir: -1 })
   const [err, setErr] = useState('')
   const width = useWidth(); const [layout, setLayout] = useState<'auto' | 'full' | 'compact'>('auto')
   const compact = layout === 'auto' ? width < 1900 : layout === 'compact'
@@ -35,12 +36,13 @@ export default function Overview() {
   ], [D, R])
   const shown = useMemo(() => {
     const col = cols.find(c => c.key === sort.key)!
-    return rows.filter(r => all || !r.excluded).sort((a, b) => {
+    const kindOf = (r: Row) => r.hook_kind ?? (r.hooks === ZERO_ADDR ? 'none' : 'liquidity')
+    return rows.filter(r => (all || !r.excluded) && (hookF === 'all' || kindOf(r) === hookF)).sort((a, b) => {
       const va = col.get(a), vb = col.get(b)
       if (va === null || va === undefined) return 1; if (vb === null || vb === undefined) return -1
       return (va < vb ? -1 : va > vb ? 1 : 0) * sort.dir
     })
-  }, [rows, all, sort, cols])
+  }, [rows, all, hookF, sort, cols])
   const cand = rows.filter(r => !r.excluded).length
   return <>
     <div className="toolbar">
@@ -48,6 +50,7 @@ export default function Overview() {
       <span><label>投入</label><Seg value={D} onChange={setD} options={[['d200', '$200'], ['d1000', '$1000'], ['d5000', '$5000']]} /></span>
       <span><label>區間</label><Seg value={R} onChange={setR} options={[['r10', '±10%'], ['r25', '±25%'], ['rvol', 'vol']]} /></span>
       <span><label>顯示</label><Seg value={all ? 'all' : 'cand'} onChange={v => setAll(v === 'all')} options={[['cand', `候選 ${cand}`], ['all', `全部 ${rows.length}`]]} /></span>
+      <span><label>Hook</label><Seg value={hookF} onChange={v => setHookF(v as any)} options={[['all', '全部'], ['none', '無 hook'], ['fee_only', '純費率 hook']]} /></span>
       <span><label>版面</label><Seg value={layout} onChange={v => setLayout(v as any)} options={[['auto', '自動'], ['full', '完整'], ['compact', '精簡']]} /></span>
       {err && <span className="neg">{err}</span>}
     </div>
@@ -58,7 +61,7 @@ export default function Overview() {
       <tbody>{shown.map(r => { const sm = simOf(r, D, R); return <tr key={r.pool_id} className={r.excluded ? 'excluded' : ''}>
         <td className="num">{r.rank_today ?? '—'}{tight && <span className="sub"><RankArrow today={r.rank_today} prev={r.rank_prev} /></span>}</td>
         {!tight && <td><RankArrow today={r.rank_today} prev={r.rank_prev} /></td>}
-        <td className="l"><Link to={`/pool/${r.pool_id}`}><PoolName symbol={r.symbol} fee_ppm={r.fee_ppm} hooks={r.hooks} protocol={r.protocol} /></Link>
+        <td className="l"><Link to={`/pool/${r.pool_id}`}><PoolName symbol={r.symbol} fee_ppm={r.fee_ppm} fee_ppm_observed={r.fee_ppm_observed} hooks={r.hooks} hook_kind={r.hook_kind} hook_flags={r.hook_flags} protocol={r.protocol} /></Link>
           <span className="sub">TVL <b>{fmtUsd(r.tvl_usd)}</b> · 7日量 <b>{fmtUsd(r.vol7_avg_usd)}</b> · CV {fmtNum(r.vol7_cv, 2)} · 交易者 <b>{r.trader_count ?? '—'}</b> · top1 {fmtPct(r.top1_share)} · 偏離 <span className={r.price_dev_pct !== null && Math.abs(r.price_dev_pct) > 0.03 ? 'warn' : ''}>{fmtPct(r.price_dev_pct, 1)}</span> · 原始 {fmtPct(r.raw_apr)} <FlagChips flags={r.flags} max={3} /></span>
         </td>
         <td className={'num ' + (sm ? (sm.net_apr >= 0 ? 'pos' : 'neg') : '')}>{fmtPct(sm?.net_apr ?? null)}<span className="sub">淨 {fmtUsd(sm?.net_usd ?? null, 1)}{tight && <> · 區間 <b>{fmtPct(sm?.in_range_pct ?? null)}</b> · <b>{fmtNum(r.score, 3)}</b></>}</span></td>
@@ -71,7 +74,7 @@ export default function Overview() {
         {cols.map(c => {
           const v = c.get(r)
           if (c.key === 'arrow') return <td key={c.key}><RankArrow today={r.rank_today} prev={r.rank_prev} /></td>
-          if (c.key === 'symbol') return <td key={c.key} className="l"><Link to={`/pool/${r.pool_id}`}><PoolName symbol={r.symbol} fee_ppm={r.fee_ppm} hooks={r.hooks} protocol={r.protocol} /></Link></td>
+          if (c.key === 'symbol') return <td key={c.key} className="l"><Link to={`/pool/${r.pool_id}`}><PoolName symbol={r.symbol} fee_ppm={r.fee_ppm} fee_ppm_observed={r.fee_ppm_observed} hooks={r.hooks} hook_kind={r.hook_kind} hook_flags={r.hook_flags} protocol={r.protocol} /></Link></td>
           if (c.key === 'flags') return <td key={c.key} className="l"><FlagChips flags={r.flags} /></td>
           return <td key={c.key} className={'num ' + (c.cls?.(v, r) ?? '')}>{c.fmt ? c.fmt(v) : String(v ?? '—')}</td>
         })}
