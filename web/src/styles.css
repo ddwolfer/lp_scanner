@@ -62,7 +62,7 @@ form.pos-form label { display: flex; flex-direction: column; gap: 3px; font-size
 .recharts-default-tooltip { background: var(--bg-3) !important; border: 1px solid var(--line-2) !important; font-family: var(--mono); font-size: 11px }
 
 /* ---- 直式 / 窄螢幕 ---- */
-.tablewrap { overflow-x: auto }
+.tablewrap { }  /* 不可加 overflow，否則 sticky 表頭會以此為基準被推下 */
 @media (max-width: 1280px) {
   .charts { grid-template-columns: 1fr }
   form.pos-form { grid-template-columns: repeat(2, minmax(120px, 1fr)) }
