@@ -28,7 +28,7 @@ export function upsertPools(db: Database.Database, pools: DiscoveredPool[], stoc
   db.transaction(() => {
     for (const p of pools) {
       const side = isStockUsdgPool(p, stockSet); if (!side) continue
-      const r = st.run(p.poolId, 'v4', p.currency0, p.currency1, p.feePpm, p.tickSpacing, p.hooks, Number(p.createdBlock), blockTs.get(p.createdBlock.toString()) ?? null, 'usdg', side === 'token0' ? 1 : 0)
+      const r = st.run(p.poolId, p.protocol ?? 'v4', p.currency0, p.currency1, p.feePpm, p.tickSpacing, p.hooks, Number(p.createdBlock), blockTs.get(p.createdBlock.toString()) ?? null, 'usdg', side === 'token0' ? 1 : 0)
       n += r.changes
     }
   })()
@@ -85,12 +85,12 @@ export function updateWash(db: Database.Database, poolId: string, date: string, 
 import type { OnchainPosition } from './sources/positions.js'
 import { stockPriceUsd } from './metrics/price.js'
 import { STOCK_DECIMALS } from '../config/chain.js'
-export interface PositionValuation { positionId: number; poolId: string; label: string; valueUsd: number; feesUsd: number; inRange: boolean; priceUsd: number; rangeLower: number; rangeUpper: number; isNew: boolean; closed: boolean }
+export interface PositionValuation { positionId: number; tokenId: string; poolId: string; label: string; valueUsd: number; feesUsd: number; inRange: boolean; priceUsd: number; rangeLower: number; rangeUpper: number; isNew: boolean; closed: boolean }
 /** 鏈上頭寸同步進 positions 表（notes JSON 記 tokenId），並回傳估值供寫快照與摘要 */
 export function syncPositions(db: Database.Database, list: OnchainPosition[], stockByAddr: Map<string, { tokenSymbol: string }>, nowIso: string): PositionValuation[] {
   const out: PositionValuation[] = []
   const seenTokenIds = new Set<string>()
-  const find = db.prepare(`SELECT * FROM positions WHERE json_extract(notes, '$.tokenId') = ?`)
+  const find = db.prepare(`SELECT * FROM positions WHERE json_extract(notes, '$.tokenId') = ? AND COALESCE(json_extract(notes, '$.protocol'), 'v4') = ?`)
   for (const p of list) {
     seenTokenIds.add(p.tokenId)
     const stockIs0 = p.currency1 === ADDR.usdg && stockByAddr.has(p.currency0), stockIs1 = p.currency0 === ADDR.usdg && stockByAddr.has(p.currency1)
@@ -103,18 +103,19 @@ export function syncPositions(db: Database.Database, list: OnchainPosition[], st
     const stockFee = (stockIs0 ? p.fee0 : p.fee1) / 10 ** STOCK_DECIMALS, usdgFee = (stockIs0 ? p.fee1 : p.fee0) / 10 ** USDG_DECIMALS
     const valueUsd = stockAmt * price + usdgAmt, feesUsd = stockFee * price + usdgFee
     const inRange = p.tick >= p.tickLower && p.tick < p.tickUpper
-    let row = find.get(p.tokenId) as any; let isNew = false
+    let row = find.get(p.tokenId, p.protocol ?? 'v4') as any; let isNew = false
+    if (!row && p.liquidity === 0n) continue   // 第一次看到就已關閉的舊頭寸：歷史不可知，不建立
     if (!row) {
       isNew = true
-      const notes = JSON.stringify({ source: 'onchain', tokenId: p.tokenId, deposit_estimated: true, tickLower: p.tickLower, tickUpper: p.tickUpper })
+      const notes = JSON.stringify({ source: 'onchain', protocol: p.protocol ?? 'v4', tokenId: p.tokenId, deposit_estimated: true, tickLower: p.tickLower, tickUpper: p.tickUpper })
       const id = Number(db.prepare(`INSERT INTO positions(pool_id,label,range_lower,range_upper,deposit_usd,opened_at,notes) VALUES (?,?,?,?,?,?,?)`)
-        .run(p.poolId, `${sym} #${p.tokenId.slice(-4)}`, lo, hi, valueUsd + feesUsd, nowIso, notes).lastInsertRowid)
-      row = { id, pool_id: p.poolId, label: `${sym} #${p.tokenId.slice(-4)}`, range_lower: lo, range_upper: hi, closed_at: null }
+        .run(p.poolId, `${sym} ${p.protocol === 'v3' ? 'v3 ' : ''}#${p.tokenId.slice(-4)}`, lo, hi, valueUsd + feesUsd, nowIso, notes).lastInsertRowid)
+      row = { id, pool_id: p.poolId, label: `${sym} ${p.protocol === 'v3' ? 'v3 ' : ''}#${p.tokenId.slice(-4)}`, range_lower: lo, range_upper: hi, closed_at: null }
     }
     const closed = p.liquidity === 0n
     if (closed && !row.closed_at) db.prepare('UPDATE positions SET closed_at=? WHERE id=?').run(nowIso, row.id)
     if (!closed && row.closed_at) db.prepare('UPDATE positions SET closed_at=NULL WHERE id=?').run(row.id)
-    out.push({ positionId: row.id, poolId: p.poolId, label: row.label, valueUsd, feesUsd, inRange, priceUsd: price, rangeLower: row.range_lower, rangeUpper: row.range_upper, isNew, closed })
+    out.push({ positionId: row.id, tokenId: p.tokenId, poolId: p.poolId, label: row.label, valueUsd, feesUsd, inRange, priceUsd: price, rangeLower: row.range_lower, rangeUpper: row.range_upper, isNew, closed })
   }
   return out
 }

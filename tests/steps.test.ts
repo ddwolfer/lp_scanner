@@ -12,9 +12,9 @@ it('upsertTokens 寫入股票與 USDG，重複呼叫更新', () => {
 it('upsertPools 只收股票×USDG，記 stock_is_token0', () => {
   const db = openDb(':memory:'); upsertTokens(db, [asset], '2026-09-03')
   const n = upsertPools(db, [
-    { poolId: '0x1', currency0: '0xsofi', currency1: usdg, feeRaw: 30000, feePpm: 30000, tickSpacing: 60, hooks: zero, createdBlock: 10n },
-    { poolId: '0x2', currency0: '0xmeme', currency1: usdg, feeRaw: 30000, feePpm: 30000, tickSpacing: 60, hooks: zero, createdBlock: 11n },
-    { poolId: '0x3', currency0: usdg, currency1: '0xsofi', feeRaw: 30000, feePpm: 30000, tickSpacing: 60, hooks: zero, createdBlock: 12n },
+    { protocol: 'v4' as const, poolId: '0x1', currency0: '0xsofi', currency1: usdg, feeRaw: 30000, feePpm: 30000, tickSpacing: 60, hooks: zero, createdBlock: 10n },
+    { protocol: 'v4' as const, poolId: '0x2', currency0: '0xmeme', currency1: usdg, feeRaw: 30000, feePpm: 30000, tickSpacing: 60, hooks: zero, createdBlock: 11n },
+    { protocol: 'v4' as const, poolId: '0x3', currency0: usdg, currency1: '0xsofi', feeRaw: 30000, feePpm: 30000, tickSpacing: 60, hooks: zero, createdBlock: 12n },
   ], new Set(['0xsofi']), new Map([['10', '2026-09-01T00:00:00Z']]))
   expect(n).toBe(2)
   expect(db.prepare('SELECT stock_is_token0, created_at FROM pools WHERE pool_id=?').get('0x1')).toEqual({ stock_is_token0: 1, created_at: '2026-09-01T00:00:00Z' })
@@ -42,7 +42,7 @@ it('syncPositions 建立/更新鏈上頭寸並估值', () => {
   const db = openDb(':memory:'); upsertTokens(db, [asset], '2026-09-04')
   db.prepare(`INSERT INTO pools(pool_id,protocol,token0,token1,fee_ppm,hooks,stock_is_token0) VALUES ('0xp','v4','0xsofi',?,3000,'0x0',1)`).run(usdg)
   const sqrtP = BigInt(Math.round(Math.sqrt(1.0001 ** -209824) * 2 ** 96))   // 股票是 token0（18）、USDG token1（6）：raw 價 × 1e12 ≈ 772.5
-  const pos = { tokenId: '1219367', poolId: '0xp', currency0: '0xsofi', currency1: usdg, feePpm: 3000, hooks: '0x0', tickLower: -210000, tickUpper: -209640, liquidity: 3901620141659787n, tick: -209824, sqrtPriceX96: sqrtP, amount0: 1.285e18, amount1: 950.5e6, fee0: 0.0116e18, fee1: 8.29e6 }
+  const pos = { protocol: 'v4' as const, tokenId: '1219367', poolId: '0xp', currency0: '0xsofi', currency1: usdg, feePpm: 3000, hooks: '0x0', tickLower: -210000, tickUpper: -209640, liquidity: 3901620141659787n, tick: -209824, sqrtPriceX96: sqrtP, amount0: 1.285e18, amount1: 950.5e6, fee0: 0.0116e18, fee1: 8.29e6 }
   const v = syncPositions(db, [pos], new Map([['0xsofi', { tokenSymbol: 'SOFI' }]]), '2026-09-04T00:00:00Z')
   expect(v).toHaveLength(1); expect(v[0].isNew).toBe(true); expect(v[0].inRange).toBe(true)
   expect(v[0].priceUsd).toBeCloseTo(772.5, 0); expect(v[0].valueUsd).toBeCloseTo(950.5 + 1.285 * 772.5, 0); expect(v[0].feesUsd).toBeCloseTo(8.29 + 0.0116 * 772.5, 0)
@@ -51,4 +51,22 @@ it('syncPositions 建立/更新鏈上頭寸並估值', () => {
   const again = syncPositions(db, [{ ...pos, liquidity: 0n }], new Map([['0xsofi', { tokenSymbol: 'SOFI' }]]), '2026-09-05T00:00:00Z')
   expect(again[0].isNew).toBe(false); expect(again[0].closed).toBe(true)
   expect((db.prepare('SELECT closed_at FROM positions').get() as any).closed_at).toBe('2026-09-05T00:00:00Z')
+})
+
+it('syncPositions 對 v3 頭寸用 protocol 區分 tokenId，label 帶 v3', () => {
+  const db = openDb(':memory:'); upsertTokens(db, [asset], '2026-09-04')
+  db.prepare(`INSERT INTO pools(pool_id,protocol,token0,token1,fee_ppm,hooks,stock_is_token0) VALUES ('0xv3pool','v3','0xsofi',?,10000,'0x0',1)`).run(usdg)
+  const sqrtP = BigInt(Math.round(Math.sqrt(1.0001 ** -209824) * 2 ** 96))
+  const pos = { protocol: 'v3' as const, tokenId: '1219367', poolId: '0xv3pool', currency0: '0xsofi', currency1: usdg, feePpm: 10000, hooks: '0x0', tickLower: -210000, tickUpper: -209640, liquidity: 1n, tick: -209824, sqrtPriceX96: sqrtP, amount0: 0, amount1: 0, fee0: 0, fee1: 0 }
+  const v = syncPositions(db, [pos], new Map([['0xsofi', { tokenSymbol: 'SOFI' }]]), '2026-09-04T00:00:00Z')
+  expect(v[0].label).toBe('SOFI v3 #9367')
+  expect(JSON.parse((db.prepare('SELECT notes FROM positions').get() as any).notes).protocol).toBe('v3')
+})
+
+it('第一次看到就已關閉的頭寸不建立', () => {
+  const db = openDb(':memory:'); upsertTokens(db, [asset], '2026-09-04')
+  db.prepare(`INSERT INTO pools(pool_id,protocol,token0,token1,fee_ppm,hooks,stock_is_token0) VALUES ('0xp','v4','0xsofi',?,3000,'0x0',1)`).run(usdg)
+  const pos = { protocol: 'v4' as const, tokenId: '1', poolId: '0xp', currency0: '0xsofi', currency1: usdg, feePpm: 3000, hooks: '0x0', tickLower: -210000, tickUpper: -209640, liquidity: 0n, tick: -209824, sqrtPriceX96: 2n ** 96n, amount0: 0, amount1: 0, fee0: 0, fee1: 0 }
+  expect(syncPositions(db, [pos], new Map([['0xsofi', { tokenSymbol: 'SOFI' }]]), '2026-09-04T00:00:00Z')).toEqual([])
+  expect((db.prepare('SELECT COUNT(*) c FROM positions').get() as any).c).toBe(0)
 })

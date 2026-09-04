@@ -93,10 +93,15 @@ export function exportPositions(db: Database.Database, dir: string): string[] {
   for (const p of listPositions(db)) {
     const pool = db.prepare('SELECT protocol, fee_ppm, hooks, token0, token1, stock_is_token0 FROM pools WHERE pool_id=?').get(p.pool_id)
     const snaps = db.prepare('SELECT date, value_usd, fees_cum_usd, in_range FROM position_snapshots WHERE position_id=? ORDER BY date').all(p.id)
-    const key = p.notes_json?.tokenId ?? `manual-${p.id}`
+    const key = positionKey(p.notes_json, p.id)
     const out = { id: p.id, label: p.label, symbol: p.symbol, pool_id: p.pool_id, pool, range_usd: [p.range_lower, p.range_upper], deposit_usd: p.deposit_usd,
       opened_at: p.opened_at, closed_at: p.closed_at, onchain: p.notes_json, latest_actual: p.actual, latest_sim_estimate: p.est, daily: snaps, actual_vs_sim: p.history, final: p.final, journal: listJournal(db, p.id), exported_at: new Date().toISOString() }
     const f = `${dir}/${key}.json`; writeFileSync(f, JSON.stringify(out, null, 2)); files.push(f)
   }
   return files
+}
+
+export function positionKey(notes: any, id: number): string {
+  if (!notes?.tokenId) return `manual-${id}`
+  return notes.protocol === 'v3' ? `v3-${notes.tokenId}` : String(notes.tokenId)
 }

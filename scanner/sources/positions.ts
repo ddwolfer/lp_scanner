@@ -1,5 +1,7 @@
 // scanner/sources/positions.ts — 唯讀讀取某地址的 Uniswap v4 頭寸（PositionManager NFT + StateView）。無簽名、無私鑰（SPEC §10）
-import { parseAbi, keccak256, encodeAbiParameters, parseAbiItem } from 'viem'
+import { parseAbi, keccak256, encodeAbiParameters, parseAbiItem, toEventSelector, decodeEventLog } from 'viem'
+import { MODIFY_LIQUIDITY_EVENT } from './uniswapV4.js'
+import { V3_MINT_EVENT } from './uniswapV3.js'
 import { ADDR, CHAIN } from '../../config/chain.js'
 import type { Rpc } from './rpc.js'
 import { fetchJson } from './http.js'
@@ -40,7 +42,7 @@ export function poolIdOf(k: { currency0: string; currency1: string; fee: number;
     [k.currency0 as `0x${string}`, k.currency1 as `0x${string}`, k.fee, k.tickSpacing, k.hooks as `0x${string}`])).toLowerCase()
 }
 export interface OnchainPosition {
-  tokenId: string; poolId: string; currency0: string; currency1: string; feePpm: number | null; hooks: string
+  protocol: 'v3' | 'v4'; tokenId: string; poolId: string; currency0: string; currency1: string; feePpm: number | null; hooks: string
   tickLower: number; tickUpper: number; liquidity: bigint; tick: number; sqrtPriceX96: bigint
   amount0: number; amount1: number; fee0: number; fee1: number   // raw 單位
 }
@@ -71,7 +73,7 @@ export async function readV4Position(rpc: Rpc, tokenId: string): Promise<Onchain
   const salt = `0x${id.toString(16).padStart(64, '0')}` as `0x${string}`
   const [pl, last0, last1] = await rpc.call(() => rpc.client.readContract({ address: ADDR.stateView, abi: SV_ABI, functionName: 'getPositionInfo', args: [poolId as `0x${string}`, POSITION_MANAGER, tickLower, tickUpper, salt] }))
   const { amount0, amount1 } = amountsForLiquidity(liquidity, slot[0], tickLower, tickUpper)
-  return { tokenId, poolId, currency0: pk.currency0.toLowerCase(), currency1: pk.currency1.toLowerCase(), feePpm: (pk.fee & 0x800000) ? null : pk.fee, hooks: pk.hooks.toLowerCase(),
+  return { protocol: 'v4', tokenId, poolId, currency0: pk.currency0.toLowerCase(), currency1: pk.currency1.toLowerCase(), feePpm: (pk.fee & 0x800000) ? null : pk.fee, hooks: pk.hooks.toLowerCase(),
     tickLower, tickUpper, liquidity, tick: slot[1], sqrtPriceX96: slot[0], amount0, amount1, fee0: unclaimedFees(pl, in0, last0), fee1: unclaimedFees(pl, in1, last1) }
 }
 export async function fetchV4Positions(rpc: Rpc, owner: string, usage: ApiUsage, alchemyKey?: string): Promise<OnchainPosition[]> {
@@ -82,22 +84,25 @@ export async function fetchV4Positions(rpc: Rpc, owner: string, usage: ApiUsage,
 }
 
 const ERC20_TRANSFER_TOPIC = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef'
-export interface MintInfo { txHash: string; block: bigint; ts: number; deposits: Record<string, bigint> }  // deposits: token address → raw amount（owner 轉進 PoolManager 的）
+export interface MintInfo { txHash: string; block: bigint; ts: number; deposits: Record<string, bigint>; liquidity: bigint | null }  // liquidity = mint 當下加入的流動性（v4 ModifyLiquidity.liquidityDelta / v3 Mint.amount）  // deposits: token address → raw amount（owner 轉進 PoolManager 的）
 /** 從 PositionManager 的 Transfer(0x0 → owner, tokenId) 找 mint 交易，並從 receipt 的 ERC20 Transfer 取投入量。公開 RPC 對 topic 精確過濾允許全鏈範圍（DECISIONS D29） */
-export async function fetchMintInfo(rpc: Rpc, tokenId: string, owner: string): Promise<MintInfo | null> {
-  const logs = await rpc.call(() => rpc.client.getLogs({ address: POSITION_MANAGER, event: TRANSFER, args: { from: ADDR.zero as `0x${string}`, tokenId: BigInt(tokenId) }, fromBlock: 0n, toBlock: 'latest' }))
+export async function fetchMintInfo(rpc: Rpc, tokenId: string, owner: string, opts: { nft?: `0x${string}`; depositTo?: string } = {}): Promise<MintInfo | null> {
+  const nft = opts.nft ?? POSITION_MANAGER; const depositTo = (opts.depositTo ?? ADDR.poolManager).toLowerCase()
+  const logs = await rpc.call(() => rpc.client.getLogs({ address: nft, event: TRANSFER, args: { from: ADDR.zero as `0x${string}`, tokenId: BigInt(tokenId) }, fromBlock: 0n, toBlock: 'latest' }))
   const mint = logs[0]; if (!mint) return null
   const [receipt, block] = await Promise.all([
     rpc.call(() => rpc.client.getTransactionReceipt({ hash: mint.transactionHash! })),
     rpc.call(() => rpc.client.getBlock({ blockNumber: mint.blockNumber! })),
   ])
-  const deposits: Record<string, bigint> = {}
+  const deposits: Record<string, bigint> = {}; let liquidity: bigint | null = null
   for (const l of receipt.logs) {
+    if (l.topics[0] === toEventSelector(MODIFY_LIQUIDITY_EVENT)) { try { const d: any = decodeEventLog({ abi: [MODIFY_LIQUIDITY_EVENT], data: l.data, topics: l.topics }); if (d.args.liquidityDelta > 0n) liquidity = (liquidity ?? 0n) + BigInt(d.args.liquidityDelta) } catch {} }
+    if (l.topics[0] === toEventSelector(V3_MINT_EVENT)) { try { const d: any = decodeEventLog({ abi: [V3_MINT_EVENT], data: l.data, topics: l.topics }); liquidity = (liquidity ?? 0n) + BigInt(d.args.amount) } catch {} }
     if (l.topics[0] !== ERC20_TRANSFER_TOPIC || l.topics.length !== 3) continue
     const from = '0x' + l.topics[1]!.slice(26), to = '0x' + l.topics[2]!.slice(26)
-    if (from.toLowerCase() === owner.toLowerCase() && to.toLowerCase() === ADDR.poolManager) deposits[l.address.toLowerCase()] = (deposits[l.address.toLowerCase()] ?? 0n) + BigInt(l.data)
+    if (from.toLowerCase() === owner.toLowerCase() && to.toLowerCase() === depositTo) deposits[l.address.toLowerCase()] = (deposits[l.address.toLowerCase()] ?? 0n) + BigInt(l.data)
   }
-  return { txHash: mint.transactionHash!, block: mint.blockNumber!, ts: Number(block.timestamp), deposits }
+  return { txHash: mint.transactionHash!, block: mint.blockNumber!, ts: Number(block.timestamp), deposits, liquidity }
 }
 /** 從投入量反推開倉時的 sqrtPrice（raw）：兩邊都有 → amount1 = L(√P − √Pa)；只有 token0 → 價格 ≤ 下緣；只有 token1 → 價格 ≥ 上緣 */
 export function sqrtPriceAtMint(L: bigint, amount0: number, amount1: number, tickLower: number, tickUpper: number): number {
@@ -105,4 +110,33 @@ export function sqrtPriceAtMint(L: bigint, amount0: number, amount1: number, tic
   if (amount1 > 0 && amount0 > 0) return amount1 / l + sa
   if (amount1 > 0) return sb
   return sa
+}
+
+// ---- v3：NonfungiblePositionManager ----
+import { V3_NPM, V3_FACTORY, V3_POOL_ABI } from './uniswapV3.js'
+const NPM_ABI = parseAbi([
+  'function balanceOf(address owner) view returns (uint256)',
+  'function tokenOfOwnerByIndex(address owner, uint256 index) view returns (uint256)',
+  'function positions(uint256 tokenId) view returns (uint96 nonce, address operator, address token0, address token1, uint24 fee, int24 tickLower, int24 tickUpper, uint128 liquidity, uint256 feeGrowthInside0LastX128, uint256 feeGrowthInside1LastX128, uint128 tokensOwed0, uint128 tokensOwed1)',
+  'function collect((uint256 tokenId, address recipient, uint128 amount0Max, uint128 amount1Max) params) returns (uint256 amount0, uint256 amount1)',
+])
+const V3F_ABI = parseAbi(['function getPool(address, address, uint24) view returns (address)'])
+const MAX128 = 2n ** 128n - 1n
+/** v3 頭寸：未領費用用 collect 的 eth_call 模擬（不送交易）取得 tokensOwed + 未結算 feeGrowth */
+export async function fetchV3Positions(rpc: Rpc, owner: string): Promise<OnchainPosition[]> {
+  const n = await rpc.call(() => rpc.client.readContract({ address: V3_NPM, abi: NPM_ABI, functionName: 'balanceOf', args: [owner as `0x${string}`] }))
+  const out: OnchainPosition[] = []
+  for (let i = 0n; i < n; i++) {
+    const id = await rpc.call(() => rpc.client.readContract({ address: V3_NPM, abi: NPM_ABI, functionName: 'tokenOfOwnerByIndex', args: [owner as `0x${string}`, i] }))
+    const p = await rpc.call(() => rpc.client.readContract({ address: V3_NPM, abi: NPM_ABI, functionName: 'positions', args: [id] }))
+    const [, , token0, token1, fee, tickLower, tickUpper, liquidity] = p
+    const pool = await rpc.call(() => rpc.client.readContract({ address: V3_FACTORY, abi: V3F_ABI, functionName: 'getPool', args: [token0, token1, fee] }))
+    const slot = await rpc.call(() => rpc.client.readContract({ address: pool, abi: V3_POOL_ABI, functionName: 'slot0' }))
+    let fee0 = 0, fee1 = 0
+    try { const r = await rpc.call(() => rpc.client.simulateContract({ address: V3_NPM, abi: NPM_ABI, functionName: 'collect', args: [{ tokenId: id, recipient: owner as `0x${string}`, amount0Max: MAX128, amount1Max: MAX128 }], account: owner as `0x${string}` })); fee0 = Number(r.result[0]); fee1 = Number(r.result[1]) } catch { /* 沒有可領費用時 collect 可能 revert */ }
+    const { amount0, amount1 } = amountsForLiquidity(liquidity, slot[0], tickLower, tickUpper)
+    out.push({ protocol: 'v3', tokenId: id.toString(), poolId: String(pool).toLowerCase(), currency0: token0.toLowerCase(), currency1: token1.toLowerCase(), feePpm: fee, hooks: ADDR.zero,
+      tickLower, tickUpper, liquidity, tick: slot[1], sqrtPriceX96: slot[0], amount0, amount1, fee0, fee1 })
+  }
+  return out
 }

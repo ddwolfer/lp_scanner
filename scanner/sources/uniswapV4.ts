@@ -11,10 +11,10 @@ const STATE_VIEW_ABI = parseAbi([
   'function getLiquidity(bytes32 poolId) view returns (uint128 liquidity)',
 ])
 
-export interface DiscoveredPool { poolId: string; currency0: string; currency1: string; feeRaw: number; feePpm: number | null; tickSpacing: number; hooks: string; createdBlock: bigint }
+export interface DiscoveredPool { protocol: 'v3' | 'v4'; poolId: string; currency0: string; currency1: string; feeRaw: number; feePpm: number | null; tickSpacing: number; hooks: string; createdBlock: bigint }
 export function decodeInitialize(log: any): DiscoveredPool {
   const a = log.args; const feeRaw = Number(a.fee)
-  return { poolId: String(a.id).toLowerCase(), currency0: String(a.currency0).toLowerCase(), currency1: String(a.currency1).toLowerCase(),
+  return { protocol: 'v4', poolId: String(a.id).toLowerCase(), currency0: String(a.currency0).toLowerCase(), currency1: String(a.currency1).toLowerCase(),
     feeRaw, feePpm: (feeRaw & DYNAMIC_FEE_FLAG) ? null : feeRaw, tickSpacing: Number(a.tickSpacing), hooks: String(a.hooks).toLowerCase(), createdBlock: BigInt(log.blockNumber) }
 }
 /** 池子宇宙：一邊是 USDG（DECISIONS C1）。股票白名單過濾在呼叫端做。 */
