@@ -21,6 +21,7 @@ import { analyzeWash, type WashSwap } from './metrics/wash.js'
 import { fetchModifyLiquidity } from './sources/uniswapV4.js'
 import { makeTraderRpc, resolveTxFrom } from './sources/traders.js'
 import { updateWash } from './steps.js'
+import { listPositions } from '../server/queries.js'
 
 const WEEKDAY_ZH = ['日', '一', '二', '三', '四', '五', '六']
 const STOCKISH = /^[A-Z]{1,5}$/
@@ -160,7 +161,7 @@ export async function runDaily(opts: { dbPath?: string; now?: Date; simOnly?: bo
                      ...cands.filter(r => !prev.has(r.pool_id) && prev.size > 0).map(r => ({ label: label(r), kind: 'added' as const }))]
     const text = formatDailySummary({ date, weekdayZh: WEEKDAY_ZH[new Date(date + 'T00:00:00+08:00').getDay()], poolsScanned, candidates: cands.length, sortKey: scoring.sort_key,
       top: cands.slice(0, 5).map(r => { const sim = r.sim ? JSON.parse(r.sim) as SimJson : null
-        return { label: label(r), feePct: (r.fee_ppm / 1e4).toFixed(2) + '%', netApr: getSimField(sim, scoring.sort_key, 'net_apr'), inRangePct: getSimField(sim, scoring.sort_key, 'in_range_pct'), traderCount: r.trader_count } }), changes, positions: [] })
+        return { label: label(r), feePct: (r.fee_ppm / 1e4).toFixed(2) + '%', netApr: getSimField(sim, scoring.sort_key, 'net_apr'), inRangePct: getSimField(sim, scoring.sort_key, 'in_range_pct'), traderCount: r.trader_count } }), changes, positions: formatPositions(listPositions(db)) })
     console.log('\n' + text + '\n')
     const sent = await sendTelegram(text, { token: process.env.TELEGRAM_BOT_TOKEN, chatId: process.env.TELEGRAM_CHAT_ID, topicId: process.env.TELEGRAM_TOPIC_ID })
     pruneHourly(db)
@@ -174,3 +175,13 @@ export async function runDaily(opts: { dbPath?: string; now?: Date; simOnly?: bo
 }
 const isMain = process.argv[1] && import.meta.url.endsWith(process.argv[1].split('/').pop()!)
 if (isMain) runDaily({ simOnly: process.argv.includes('--sim-only') }).catch(e => { console.error(e); process.exit(1) })
+
+/** 摘要的「我的頭寸」列：未關閉的頭寸，淨損益為 pool_hourly 模擬估算（DECISIONS D27），P5 改為每日真實回填 */
+export function formatPositions(list: ReturnType<typeof listPositions>): string[] {
+  return list.filter(p => !p.closed_at).map(p => {
+    if (!p.est) return `${p.symbol}/USDG ${p.label}  無小時資料`
+    const days = Math.max(1, Math.round(p.est.hours / 24))
+    const sign = p.est.net_usd >= 0 ? '+' : '−'
+    return `${p.symbol}/USDG ${p.label}  ${sign}$${Math.abs(p.est.net_usd).toFixed(2)} (${days}d, 估算)  在區間 ${p.est.in_range ? '✓' : '✗'}`
+  })
+}
