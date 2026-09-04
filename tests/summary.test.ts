@@ -25,3 +25,12 @@ it('有 topicId 時帶 message_thread_id', async () => {
   await sendTelegram('hi', { token: 'T', chatId: 'C', topicId: '42' }, f as any)
   expect(JSON.parse(f.mock.calls[0][1].body)).toMatchObject({ chat_id: 'C', message_thread_id: 42 })
 })
+import { formatPositions } from '../scanner/run.js'
+it('formatPositions 只列未關閉頭寸', () => {
+  const rows = [
+    { symbol: 'SOFI', label: '#1', closed_at: null, est: { net_usd: 18.4, hours: 168, in_range: true } },
+    { symbol: 'IBM', label: '#2', closed_at: '2026-09-01', est: { net_usd: -1, hours: 24, in_range: false } },
+    { symbol: 'AMD', label: '#3', closed_at: null, est: null },
+  ] as any
+  expect(formatPositions(rows)).toEqual(['SOFI/USDG #1  +$18.40 (7d, 估算)  在區間 ✓', 'AMD/USDG #3  無小時資料'])
+})
