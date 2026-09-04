@@ -10,6 +10,8 @@ CREATE TABLE IF NOT EXISTS pools (
   pool_id TEXT PRIMARY KEY, protocol TEXT, token0 TEXT REFERENCES tokens, token1 TEXT REFERENCES tokens,
   fee_ppm INTEGER, tick_spacing INTEGER, hooks TEXT, created_block INTEGER, created_at TEXT,
   quote_kind TEXT,
+  hook_kind TEXT,                    -- [D36] 'none' | 'fee_only' | 'liquidity'
+  hook_flags TEXT,                   -- [D36] JSON array，hook 介入時機
   stock_is_token0 INTEGER            -- [P1] 1 = 股票代幣是 currency0；price_usd 一律為「股票代幣 / USDG」
 );
 CREATE TABLE IF NOT EXISTS pool_snapshots (
@@ -19,6 +21,7 @@ CREATE TABLE IF NOT EXISTS pool_snapshots (
   lp_overlap_volume_share REAL,      -- [P1] DECISIONS C2
   age_days INTEGER, vol7_avg_usd REAL, vol7_cv REAL,
   raw_apr REAL,                      -- [P1] fees_24h*365/tvl，P1 摘要排序用
+  fee_ppm_observed INTEGER,          -- [D36] 動態費率池：當日 swap 費率中位數
   sim TEXT, score REAL, flags TEXT, excluded INTEGER DEFAULT 0,
   wash_detail TEXT,                  -- [P3] JSON {topTraders, hourly, sampled}
   PRIMARY KEY (pool_id, date)

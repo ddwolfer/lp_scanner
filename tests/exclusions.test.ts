@@ -22,3 +22,8 @@ it('各規則各自命中', () => {
   expect(hardExclusions({ ...ok, wash: { top1Share: 0.1, pingpongRatio: 0, overlapVolumeShare: 0.4 } }, th)).not.toContain('wash_suspect')
   expect(hardExclusions({ ...ok, quoteKind: 'other' }, th)).toContain('non_usd_quote')
 })
+
+it('D36：純費率 hook 不排除但標 hook_fee_only；流動性 hook 排除', () => {
+  expect(hardExclusions({ ...ok, hooks: '0xb608a78761f179f7c56f15e7d13921b92f00a080', hookKind: 'fee_only' }, th)).toEqual(['hook_fee_only'])
+  expect(hardExclusions({ ...ok, hooks: '0x1191ac2561817686efe4296b37ba5a5419eaa880', hookKind: 'liquidity' }, th)).toContain('has_hooks')
+})
