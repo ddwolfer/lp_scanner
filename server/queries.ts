@@ -1,5 +1,6 @@
 // server/queries.ts — dashboard 用的唯讀查詢（頭寸登錄除外），可用 :memory: 測試
 import type Database from 'better-sqlite3'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { simulateHourly, type SimHour } from '../scanner/metrics/simulate.js'
 import { loadHourly } from '../scanner/steps.js'
 import { rvolRange } from '../scanner/metrics/volatility.js'
@@ -87,7 +88,6 @@ export function listJournal(db: Database.Database, positionId: number) {
 }
 /** 每筆頭寸一個 JSON：基本資料、開倉交易、每日快照、模擬對照、日誌。給使用者離線檢討用（DECISIONS D32） */
 export function exportPositions(db: Database.Database, dir: string): string[] {
-  const { mkdirSync, writeFileSync } = require('node:fs') as typeof import('node:fs')
   mkdirSync(dir, { recursive: true })
   const files: string[] = []
   for (const p of listPositions(db)) {

@@ -20,9 +20,14 @@ export default function Positions() {
     await api(`/api/positions/${p.id}/close`, { method: 'PATCH', body: JSON.stringify({ closed_at: new Date().toISOString(), fees_final_usd: Number(fees), value_final_usd: Number(value) }) }); load()
   }
   const [jText, setJText] = useState<Record<number, string>>({}); const [jKind, setJKind] = useState<Record<number, string>>({})
+  const [jImgs, setJImgs] = useState<Record<number, { name: string; dataUrl: string }[]>>({})
+  const readFiles = (id: number, files: FileList | File[]) => {
+    for (const f of Array.from(files)) { if (!f.type.startsWith('image/')) continue; const r = new FileReader(); r.onload = () => setJImgs(m => ({ ...m, [id]: [...(m[id] ?? []), { name: f.name || 'paste.png', dataUrl: String(r.result) }] })); r.readAsDataURL(f) }
+  }
+  const onPaste = (id: number, e: React.ClipboardEvent) => { const fs = Array.from(e.clipboardData.items).filter(i => i.type.startsWith('image/')).map(i => i.getAsFile()!).filter(Boolean); if (fs.length) { e.preventDefault(); readFiles(id, fs) } }
   const addNote = async (id: number) => {
-    const text = (jText[id] ?? '').trim(); if (!text) return
-    await api(`/api/positions/${id}/journal`, { method: 'POST', body: JSON.stringify({ kind: jKind[id] ?? 'note', text }) }); setJText({ ...jText, [id]: '' }); load()
+    const text = (jText[id] ?? '').trim(); const images = jImgs[id] ?? []; if (!text && !images.length) return
+    try { await api(`/api/positions/${id}/journal`, { method: 'POST', body: JSON.stringify({ kind: jKind[id] ?? 'note', text, images }) }); setJText({ ...jText, [id]: '' }); setJImgs({ ...jImgs, [id]: [] }); load() } catch (e) { setErr(String(e)) }
   }
   const KINDS: [string, string][] = [['open', '開倉理由'], ['note', '筆記'], ['adjust', '調整'], ['collect', '領手續費'], ['close', '關倉'], ['review', '檢討']]
   const tsFmt = (t: number) => new Date(t * 1000).toISOString().slice(5, 16).replace('T', ' ')
@@ -68,12 +73,16 @@ export default function Positions() {
           </> : <p className="muted">此池尚無小時資料，無法估算。</p>}
         <div style={{ marginTop: 10, borderTop: '1px solid var(--line)', paddingTop: 8 }}>
           <div className="muted" style={{ fontSize: 11, marginBottom: 4 }}>日誌（自動匯出到 data/positions/）</div>
-          {(p.journal ?? []).map((j: any) => <div key={j.id} style={{ fontSize: 12, marginBottom: 3 }}><span className="chip">{KINDS.find(k => k[0] === j.kind)?.[1] ?? j.kind}</span><span className="muted num" style={{ fontSize: 10, marginRight: 6 }}>{j.ts.slice(0, 16).replace('T', ' ')}</span>{j.text}</div>)}
-          <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+          {(p.journal ?? []).map((j: any) => <div key={j.id} style={{ fontSize: 12, marginBottom: 6 }}><span className="chip">{KINDS.find(k => k[0] === j.kind)?.[1] ?? j.kind}</span><span className="muted num" style={{ fontSize: 10, marginRight: 6 }}>{j.ts.slice(0, 16).replace('T', ' ')}</span>{j.text}
+            {j.data?.images?.length > 0 && <div style={{ display: 'flex', gap: 6, marginTop: 4, flexWrap: 'wrap' }}>{j.data.images.map((im: string) => <a key={im} href={`/api/journal-image/${im}`} target="_blank" rel="noreferrer"><img src={`/api/journal-image/${im}`} style={{ height: 90, borderRadius: 4, border: '1px solid var(--line-2)' }} /></a>)}</div>}
+          </div>)}
+          <div style={{ display: 'flex', gap: 6, marginTop: 6, alignItems: 'center' }}>
             <select value={jKind[p.id] ?? 'note'} onChange={e => setJKind({ ...jKind, [p.id]: e.target.value })}>{KINDS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select>
-            <input style={{ flex: 1 }} placeholder="為什麼開、怎麼選區間、中途做了什麼、結果如何…" value={jText[p.id] ?? ''} onChange={e => setJText({ ...jText, [p.id]: e.target.value })} onKeyDown={e => e.key === 'Enter' && addNote(p.id)} />
+            <input style={{ flex: 1 }} placeholder="打字，或直接 Ctrl+V 貼截圖…" value={jText[p.id] ?? ''} onChange={e => setJText({ ...jText, [p.id]: e.target.value })} onKeyDown={e => e.key === 'Enter' && addNote(p.id)} onPaste={e => onPaste(p.id, e)} />
+            <label className="ghost" style={{ padding: '5px 10px', cursor: 'pointer' }}>選圖<input type="file" accept="image/*" multiple style={{ display: 'none' }} onChange={e => e.target.files && readFiles(p.id, e.target.files)} /></label>
             <button className="ghost" onClick={() => addNote(p.id)}>記錄</button>
           </div>
+          {(jImgs[p.id]?.length ?? 0) > 0 && <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>{jImgs[p.id].map((im, i) => <div key={i} style={{ position: 'relative' }}><img src={im.dataUrl} style={{ height: 60, borderRadius: 4, border: '1px solid var(--amber)' }} /><button className="ghost" style={{ position: 'absolute', top: -6, right: -6, padding: '0 5px', fontSize: 10 }} onClick={() => setJImgs({ ...jImgs, [p.id]: jImgs[p.id].filter((_, k) => k !== i) })}>×</button></div>)}</div>}
         </div>
         {!p.closed_at && <div style={{ marginTop: 8 }}><button className="ghost" onClick={() => close(p)}>關閉頭寸（記錄實際手續費與市值）</button></div>}
       </div>)}
