@@ -73,7 +73,30 @@ export function listPositions(db: Database.Database) {
     // 每日「實際 vs 模擬」：模擬取該日最後一小時的累積值
     const simByDate = new Map<string, number>(); for (const e of est) simByDate.set(new Date(e.row.ts * 1000).toISOString().slice(0, 10), e.valueH + e.cumFees - r.deposit_usd)
     const history = snaps.map(sn => ({ date: sn.date, actual: sn.value_usd + sn.fees_cum_usd - r.deposit_usd, sim: simByDate.get(sn.date) ?? null }))
-    return { ...r, notes_json: notes, est: last ? { value_usd: last.valueH, fees_cum_usd: last.cumFees, in_range: last.inRange, net_usd: last.valueH + last.cumFees - r.deposit_usd, price: last.row.priceUsd, hours: est.length } : null,
+    return { ...r, notes_json: notes, journal: listJournal(db, r.id), est: last ? { value_usd: last.valueH, fees_cum_usd: last.cumFees, in_range: last.inRange, net_usd: last.valueH + last.cumFees - r.deposit_usd, price: last.row.priceUsd, hours: est.length } : null,
       actual, history, curve: est.map(e => ({ ts: e.row.ts, net: e.valueH + e.cumFees - r.deposit_usd })), final: finalSnap ? { value_usd: finalSnap.value_usd, fees_cum_usd: finalSnap.fees_cum_usd } : null }
   })
+}
+
+export type JournalKind = 'open' | 'note' | 'adjust' | 'collect' | 'close' | 'review'
+export function addJournal(db: Database.Database, positionId: number, kind: JournalKind, text: string, data?: unknown): number {
+  return Number(db.prepare('INSERT INTO position_journal(position_id,ts,kind,text,data) VALUES (?,?,?,?,?)').run(positionId, new Date().toISOString(), kind, text, data ? JSON.stringify(data) : null).lastInsertRowid)
+}
+export function listJournal(db: Database.Database, positionId: number) {
+  return (db.prepare('SELECT * FROM position_journal WHERE position_id=? ORDER BY ts').all(positionId) as any[]).map(r => ({ ...r, data: r.data ? JSON.parse(r.data) : null }))
+}
+/** 每筆頭寸一個 JSON：基本資料、開倉交易、每日快照、模擬對照、日誌。給使用者離線檢討用（DECISIONS D32） */
+export function exportPositions(db: Database.Database, dir: string): string[] {
+  const { mkdirSync, writeFileSync } = require('node:fs') as typeof import('node:fs')
+  mkdirSync(dir, { recursive: true })
+  const files: string[] = []
+  for (const p of listPositions(db)) {
+    const pool = db.prepare('SELECT protocol, fee_ppm, hooks, token0, token1, stock_is_token0 FROM pools WHERE pool_id=?').get(p.pool_id)
+    const snaps = db.prepare('SELECT date, value_usd, fees_cum_usd, in_range FROM position_snapshots WHERE position_id=? ORDER BY date').all(p.id)
+    const key = p.notes_json?.tokenId ?? `manual-${p.id}`
+    const out = { id: p.id, label: p.label, symbol: p.symbol, pool_id: p.pool_id, pool, range_usd: [p.range_lower, p.range_upper], deposit_usd: p.deposit_usd,
+      opened_at: p.opened_at, closed_at: p.closed_at, onchain: p.notes_json, latest_actual: p.actual, latest_sim_estimate: p.est, daily: snaps, actual_vs_sim: p.history, final: p.final, journal: listJournal(db, p.id), exported_at: new Date().toISOString() }
+    const f = `${dir}/${key}.json`; writeFileSync(f, JSON.stringify(out, null, 2)); files.push(f)
+  }
+  return files
 }

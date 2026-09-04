@@ -19,6 +19,12 @@ export default function Positions() {
     const value = prompt('最終市值 (USD)', p.est ? p.est.value_usd.toFixed(2) : String(p.deposit_usd)); if (value === null) return
     await api(`/api/positions/${p.id}/close`, { method: 'PATCH', body: JSON.stringify({ closed_at: new Date().toISOString(), fees_final_usd: Number(fees), value_final_usd: Number(value) }) }); load()
   }
+  const [jText, setJText] = useState<Record<number, string>>({}); const [jKind, setJKind] = useState<Record<number, string>>({})
+  const addNote = async (id: number) => {
+    const text = (jText[id] ?? '').trim(); if (!text) return
+    await api(`/api/positions/${id}/journal`, { method: 'POST', body: JSON.stringify({ kind: jKind[id] ?? 'note', text }) }); setJText({ ...jText, [id]: '' }); load()
+  }
+  const KINDS: [string, string][] = [['open', '開倉理由'], ['note', '筆記'], ['adjust', '調整'], ['collect', '領手續費'], ['close', '關倉'], ['review', '檢討']]
   const tsFmt = (t: number) => new Date(t * 1000).toISOString().slice(5, 16).replace('T', ' ')
   return <>
     <h2>登錄頭寸</h2>
@@ -60,6 +66,15 @@ export default function Positions() {
             <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>{p.est.in_range ? '✓ 在區間內' : '✗ 出區間'} · 池價 {fmtNum(p.est.price, 3)} · {p.est.hours} 小時 · 以 pool_hourly 模擬估算，P5 回填實際值</div>
             <ResponsiveContainer width="100%" height={120}><LineChart data={p.curve}><CartesianGrid stroke="#262b34" /><XAxis dataKey="ts" tickFormatter={tsFmt} minTickGap={50} /><YAxis width={50} tickFormatter={v => '$' + v.toFixed(0)} /><Tooltip labelFormatter={v => tsFmt(Number(v))} /><Legend /><Line type="monotone" dataKey="net" name="模擬淨損益" stroke="#f2b135" dot={false} /></LineChart></ResponsiveContainer>
           </> : <p className="muted">此池尚無小時資料，無法估算。</p>}
+        <div style={{ marginTop: 10, borderTop: '1px solid var(--line)', paddingTop: 8 }}>
+          <div className="muted" style={{ fontSize: 11, marginBottom: 4 }}>日誌（自動匯出到 data/positions/）</div>
+          {(p.journal ?? []).map((j: any) => <div key={j.id} style={{ fontSize: 12, marginBottom: 3 }}><span className="chip">{KINDS.find(k => k[0] === j.kind)?.[1] ?? j.kind}</span><span className="muted num" style={{ fontSize: 10, marginRight: 6 }}>{j.ts.slice(0, 16).replace('T', ' ')}</span>{j.text}</div>)}
+          <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+            <select value={jKind[p.id] ?? 'note'} onChange={e => setJKind({ ...jKind, [p.id]: e.target.value })}>{KINDS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select>
+            <input style={{ flex: 1 }} placeholder="為什麼開、怎麼選區間、中途做了什麼、結果如何…" value={jText[p.id] ?? ''} onChange={e => setJText({ ...jText, [p.id]: e.target.value })} onKeyDown={e => e.key === 'Enter' && addNote(p.id)} />
+            <button className="ghost" onClick={() => addNote(p.id)}>記錄</button>
+          </div>
+        </div>
         {!p.closed_at && <div style={{ marginTop: 8 }}><button className="ghost" onClick={() => close(p)}>關閉頭寸（記錄實際手續費與市值）</button></div>}
       </div>)}
     </div>

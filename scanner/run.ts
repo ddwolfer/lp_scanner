@@ -21,7 +21,7 @@ import { analyzeWash, type WashSwap } from './metrics/wash.js'
 import { fetchModifyLiquidity } from './sources/uniswapV4.js'
 import { makeTraderRpc, resolveTxFrom } from './sources/traders.js'
 import { updateWash } from './steps.js'
-import { listPositions } from '../server/queries.js'
+import { listPositions, exportPositions } from '../server/queries.js'
 import { fetchV4Positions, fetchMintInfo, sqrtPriceAtMint } from './sources/positions.js'
 import { syncPositions, writePositionSnapshot, setPositionOrigin, lastKnownTvl } from './steps.js'
 import { STOCK_DECIMALS, USDG_DECIMALS } from '../config/chain.js'
@@ -181,6 +181,7 @@ export async function runDaily(opts: { dbPath?: string; now?: Date; simOnly?: bo
           }
           if (!v.closed || v.isNew) writePositionSnapshot(db, v.positionId, date, v)
         }
+        exportPositions(db, 'data/positions')
         log(`positions: ${onchain.length} onchain, ${vals.length} tracked (${vals.filter(v => v.isNew).length} new, ${vals.filter(v => v.closed).length} closed)`)
       } catch (e) { log(`positions: ${String((e as Error).message).split('\n')[0]}`) }
     }
