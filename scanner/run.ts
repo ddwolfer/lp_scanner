@@ -21,10 +21,9 @@ import { analyzeWash, type WashSwap } from './metrics/wash.js'
 import { fetchModifyLiquidity } from './sources/uniswapV4.js'
 import { makeTraderRpc, resolveTxFrom } from './sources/traders.js'
 import { updateWash } from './steps.js'
-import { listPositions, exportPositions } from '../server/queries.js'
-import { fetchV4Positions, fetchMintInfo, sqrtPriceAtMint } from './sources/positions.js'
-import { syncPositions, writePositionSnapshot, setPositionOrigin, lastKnownTvl } from './steps.js'
-import { STOCK_DECIMALS, USDG_DECIMALS } from '../config/chain.js'
+import { listPositions } from '../server/queries.js'
+import { lastKnownTvl } from './steps.js'
+import { runPositionsStage } from './positionsStage.js'
 
 const WEEKDAY_ZH = ['日', '一', '二', '三', '四', '五', '六']
 const STOCKISH = /^[A-Z]{1,5}$/
@@ -158,33 +157,7 @@ export async function runDaily(opts: { dbPath?: string; now?: Date; simOnly?: bo
     }
     // 7. 鏈上頭寸回填（P5）：TRACK_ADDRESS 有設才做，全部唯讀
     const trackAddr = process.env.TRACK_ADDRESS
-    if (trackAddr) {
-      try {
-        const prpc = makeRpc({ usage })
-        const stockMap = new Map((db.prepare(`SELECT address, symbol FROM tokens WHERE kind='stock'`).all() as { address: string; symbol: string }[]).map(t => [t.address, { tokenSymbol: t.symbol }]))
-        const onchain = await fetchV4Positions(prpc, trackAddr, usage, process.env.ALCHEMY_KEY)
-        const vals = syncPositions(db, onchain, stockMap, now.toISOString())
-        for (const v of vals) {
-          if (v.isNew) {   // 從 mint 交易取真實投入與開倉時間（DECISIONS D29）
-            const oc = onchain.find(o => o.poolId === v.poolId)!
-            const mint = await fetchMintInfo(prpc, oc.tokenId, trackAddr).catch(() => null)
-            if (mint) {
-              const stockIs0 = stockMap.has(oc.currency0); const stockAddr = stockIs0 ? oc.currency0 : oc.currency1
-              const stockRaw = Number(mint.deposits[stockAddr] ?? 0n), usdgRaw = Number(mint.deposits[ADDR.usdg] ?? 0n)
-              const a0 = stockIs0 ? stockRaw : usdgRaw, a1 = stockIs0 ? usdgRaw : stockRaw
-              const sp = sqrtPriceAtMint(oc.liquidity, a0, a1, oc.tickLower, oc.tickUpper)
-              const priceRaw = sp * sp; const price = stockIs0 ? priceRaw * 10 ** (STOCK_DECIMALS - USDG_DECIMALS) : 1 / (priceRaw * 10 ** (USDG_DECIMALS - STOCK_DECIMALS))
-              const deposit = stockRaw / 10 ** STOCK_DECIMALS * price + usdgRaw / 10 ** USDG_DECIMALS
-              setPositionOrigin(db, v.positionId, new Date(mint.ts * 1000).toISOString(), deposit, { mint_tx: mint.txHash, mint_block: mint.block.toString(), mint_price: price, deposit_stock: stockRaw / 10 ** STOCK_DECIMALS, deposit_usdg: usdgRaw / 10 ** USDG_DECIMALS })
-              log(`position ${v.label}: opened ${new Date(mint.ts * 1000).toISOString().slice(0, 16)} deposit $${deposit.toFixed(2)} @ ${price.toFixed(2)}`)
-            }
-          }
-          if (!v.closed || v.isNew) writePositionSnapshot(db, v.positionId, date, v)
-        }
-        exportPositions(db, 'data/positions')
-        log(`positions: ${onchain.length} onchain, ${vals.length} tracked (${vals.filter(v => v.isNew).length} new, ${vals.filter(v => v.closed).length} closed)`)
-      } catch (e) { log(`positions: ${String((e as Error).message).split('\n')[0]}`) }
-    }
+    if (trackAddr) { try { await runPositionsStage(db, usage, trackAddr, date, now, log) } catch (e) { log(`positions: ${String((e as Error).message).split('\n')[0]}`) } }
     // 8. 摘要
     const today = db.prepare(`SELECT s.*, p.fee_ppm, t.symbol FROM pool_snapshots s JOIN pools p ON p.pool_id=s.pool_id
       JOIN tokens t ON t.address = CASE WHEN p.stock_is_token0=1 THEN p.token0 ELSE p.token1 END WHERE s.date=?`).all(date) as any[]
