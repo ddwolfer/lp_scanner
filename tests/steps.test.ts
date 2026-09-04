@@ -37,3 +37,18 @@ it('loadHourly 丟掉開頭 null 價並升冪；updateSim 回寫', () => {
   updateSim(db, '0x1', '2026-09-03', { meta: {} } as any, 0.5, ['rvol_fallback', 'rvol_fallback'])
   expect(db.prepare('SELECT score, flags, sim FROM pool_snapshots WHERE pool_id=? AND date=?').get('0x1', '2026-09-03')).toEqual({ score: 0.5, flags: '["rvol_fallback"]', sim: '{"meta":{}}' })
 })
+import { syncPositions, writePositionSnapshot } from '../scanner/steps.js'
+it('syncPositions 建立/更新鏈上頭寸並估值', () => {
+  const db = openDb(':memory:'); upsertTokens(db, [asset], '2026-09-04')
+  db.prepare(`INSERT INTO pools(pool_id,protocol,token0,token1,fee_ppm,hooks,stock_is_token0) VALUES ('0xp','v4','0xsofi',?,3000,'0x0',1)`).run(usdg)
+  const sqrtP = BigInt(Math.round(Math.sqrt(1.0001 ** -209824) * 2 ** 96))   // 股票是 token0（18）、USDG token1（6）：raw 價 × 1e12 ≈ 772.5
+  const pos = { tokenId: '1219367', poolId: '0xp', currency0: '0xsofi', currency1: usdg, feePpm: 3000, hooks: '0x0', tickLower: -210000, tickUpper: -209640, liquidity: 3901620141659787n, tick: -209824, sqrtPriceX96: sqrtP, amount0: 1.285e18, amount1: 950.5e6, fee0: 0.0116e18, fee1: 8.29e6 }
+  const v = syncPositions(db, [pos], new Map([['0xsofi', { tokenSymbol: 'SOFI' }]]), '2026-09-04T00:00:00Z')
+  expect(v).toHaveLength(1); expect(v[0].isNew).toBe(true); expect(v[0].inRange).toBe(true)
+  expect(v[0].priceUsd).toBeCloseTo(772.5, 0); expect(v[0].valueUsd).toBeCloseTo(950.5 + 1.285 * 772.5, 0); expect(v[0].feesUsd).toBeCloseTo(8.29 + 0.0116 * 772.5, 0)
+  expect(v[0].rangeLower).toBeCloseTo(759.05, 0); expect(v[0].rangeUpper).toBeCloseTo(786.87, 0)
+  writePositionSnapshot(db, v[0].positionId, '2026-09-04', v[0])
+  const again = syncPositions(db, [{ ...pos, liquidity: 0n }], new Map([['0xsofi', { tokenSymbol: 'SOFI' }]]), '2026-09-05T00:00:00Z')
+  expect(again[0].isNew).toBe(false); expect(again[0].closed).toBe(true)
+  expect((db.prepare('SELECT closed_at FROM positions').get() as any).closed_at).toBe('2026-09-05T00:00:00Z')
+})

@@ -259,6 +259,9 @@ LP 地址數: 9，同時也在交易的 LP: 4  ⚠️
 | D12 | Swap 時間戳 | 每日區間的首尾兩塊取真實時間戳，中間依區塊號線性內插（0.104 s/塊 → 誤差 < 1 分鐘），省下每筆 `getBlock`。 |
 | D13 | 股票在哪一邊 | v4 依地址排序決定 currency0/1，實測最大的 SOFI/USDG 池 USDG 是 currency0（USDG `0x5fc5…` < SOFI `0x98e7…`）。`pools.stock_is_token0` 記錄；`price_usd` 一律為「股票 / USDG」，與 SPEC §6「token0 以 USD 計價」不同。 |
 | D14 | P1 摘要排序 | 尚無 §7 模擬，Top 5 依 `raw_apr = fees_24h × 365 / tvl` 排序，摘要內明示「原始 APR」。 |
+| D29 | 鏈上頭寸讀取（P5） | `TRACK_ADDRESS`（.env，只讀）→ Alchemy NFT API 列 PositionManager tokenId（無 key 時掃 `Transfer` 事件）→ `getPoolAndPositionInfo` / `getPositionLiquidity` / StateView `getSlot0`、`getFeeGrowthInside`、`getPositionInfo` 算持有量與未領手續費。開倉成本與時間從 mint 交易（`Transfer(0x0→owner, tokenId)`，公開 RPC 對精確 topic 允許全鏈範圍一次查）的 receipt 取 owner → PoolManager 的 ERC20 轉帳量，價格由投入量反推。實測與使用者 App 顯示一致（SPY #1219367：手續費 0.011639 SPY / 8.29 USDG 完全吻合）。v3 頭寸目前流動性全為 0，第一版不讀 v3。 |
+| D30 | 頭寸「實際 vs 模擬」 | 實際 = 鏈上快照（現值 + 未領手續費 − 投入）；模擬 = 以頭寸真實區間與開倉時間跑 §7 引擎。差距是回填模型的核心數字，Telegram 與 dashboard 並列顯示。 |
+| D31 | TVL 來源缺漏 | DexScreener 某天沒回某池 → 沿用前一天 `tvl_usd` 並 `flags += tvl_stale`（不排除）。原因：2026-09-04 DELL 池因此被誤判 `tvl_unknown` 掉出候選。 |
 | D27 | 頭寸卡片估算（P4，P5 前暫代） | 現值 / 累積手續費 / 在區間以 `pool_hourly` 從 `opened_at` 起用 §7 引擎模擬（區間寬度由登錄的上下限反推），標示「估算」。P5 才記錄每日真實值並比對。 |
 | D28 | Dashboard 安全 | Fastify 綁 `0.0.0.0:3000`、無登入、無 tunnel（SPEC §9.4 / §10.4）；唯一寫入是 `POST /api/positions` 與 `PATCH /api/positions/:id/close`。 |
 | D24 | tx.from 來源（P3） | v4 Swap 的 `sender` 是 router，真正交易者要 `eth_getTransactionByHash` 取 `from`。Alchemy 免費方案允許此方法（只有 getLogs 被限 10 塊），有 `ALCHEMY_KEY` 就走 Alchemy（併發 8）；沒有就 public RPC。 |

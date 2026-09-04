@@ -66,7 +66,14 @@ export function listPositions(db: Database.Database) {
     const last = est[est.length - 1]
     const snaps = db.prepare('SELECT * FROM position_snapshots WHERE position_id=? ORDER BY date').all(r.id) as any[]
     const finalSnap = r.closed_at ? snaps[snaps.length - 1] : null
-    return { ...r, est: last ? { value_usd: last.valueH, fees_cum_usd: last.cumFees, in_range: last.inRange, net_usd: last.valueH + last.cumFees - r.deposit_usd, price: last.row.priceUsd, hours: est.length } : null,
-      curve: est.map(e => ({ ts: e.row.ts, net: e.valueH + e.cumFees - r.deposit_usd })), final: finalSnap ? { value_usd: finalSnap.value_usd, fees_cum_usd: finalSnap.fees_cum_usd } : null }
+    const notes = (() => { try { return JSON.parse(r.notes ?? '') } catch { return null } })()
+    const latest = snaps[snaps.length - 1]
+    const actual = latest && notes?.source === 'onchain' ? { date: latest.date, value_usd: latest.value_usd, fees_cum_usd: latest.fees_cum_usd, in_range: !!latest.in_range,
+      net_usd: latest.value_usd + latest.fees_cum_usd - r.deposit_usd, days: Math.max(1, Math.round((Date.parse(latest.date) - Date.parse(r.opened_at.slice(0, 10))) / 86400000) + 1), deposit_estimated: !!notes.deposit_estimated } : null
+    // 每日「實際 vs 模擬」：模擬取該日最後一小時的累積值
+    const simByDate = new Map<string, number>(); for (const e of est) simByDate.set(new Date(e.row.ts * 1000).toISOString().slice(0, 10), e.valueH + e.cumFees - r.deposit_usd)
+    const history = snaps.map(sn => ({ date: sn.date, actual: sn.value_usd + sn.fees_cum_usd - r.deposit_usd, sim: simByDate.get(sn.date) ?? null }))
+    return { ...r, notes_json: notes, est: last ? { value_usd: last.valueH, fees_cum_usd: last.cumFees, in_range: last.inRange, net_usd: last.valueH + last.cumFees - r.deposit_usd, price: last.row.priceUsd, hours: est.length } : null,
+      actual, history, curve: est.map(e => ({ ts: e.row.ts, net: e.valueH + e.cumFees - r.deposit_usd })), final: finalSnap ? { value_usd: finalSnap.value_usd, fees_cum_usd: finalSnap.fees_cum_usd } : null }
   })
 }

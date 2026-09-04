@@ -22,6 +22,9 @@ import { fetchModifyLiquidity } from './sources/uniswapV4.js'
 import { makeTraderRpc, resolveTxFrom } from './sources/traders.js'
 import { updateWash } from './steps.js'
 import { listPositions } from '../server/queries.js'
+import { fetchV4Positions, fetchMintInfo, sqrtPriceAtMint } from './sources/positions.js'
+import { syncPositions, writePositionSnapshot, setPositionOrigin, lastKnownTvl } from './steps.js'
+import { STOCK_DECIMALS, USDG_DECIMALS } from '../config/chain.js'
 
 const WEEKDAY_ZH = ['日', '一', '二', '三', '四', '五', '六']
 const STOCKISH = /^[A-Z]{1,5}$/
@@ -73,7 +76,8 @@ export async function runDaily(opts: { dbPath?: string; now?: Date; simOnly?: bo
       poolsScanned++
       const stockAddr: string = p.stock_is_token0 ? p.token0 : p.token1; const asset = stockByAddr.get(stockAddr)
       const feeOk = p.fee_ppm !== null && p.fee_ppm >= scoring.exclusions.fee_ppm_min && p.fee_ppm <= scoring.exclusions.fee_ppm_max
-      const tvl = tvlByPool.get(p.pool_id) ?? null
+      let tvl = tvlByPool.get(p.pool_id) ?? null; let tvlStale = false
+      if (tvl === null) { const prevTvl = lastKnownTvl(db, p.pool_id, date); if (prevTvl !== null) { tvl = prevTvl; tvlStale = true } }   // DECISIONS D31：來源缺漏時沿用前值
       // DECISIONS D16：只對無 hooks、費率合理、DexScreener TVL ≥ 門檻的池拉 Swap（其餘必被硬排除）
       const worth = p.hooks === ADDR.zero && feeOk && tvl !== null && tvl >= scoring.scan.swap_fetch_min_tvl_usd
       if (worth) swapPools++
@@ -95,10 +99,11 @@ export async function runDaily(opts: { dbPath?: string; now?: Date; simOnly?: bo
         rhStatus: asset?.status ?? null, wash: null, quoteKind: 'usdg' }, scoring.exclusions)
       if (v7.shortHistory) flags.push('short_history')
       if (swapFetchFailed) flags.push('swap_fetch_failed')
+      if (tvlStale) flags.push('tvl_stale')
       writeSnapshot(db, { pool_id: p.pool_id, date, is_weekday: isUsWeekday(now) ? 1 : 0, tvl_usd: tvl, volume_24h_usd: volume, fees_24h_usd: fees, price_usd: lastPrice,
         price_ref_usd: quote?.mid ?? null, price_dev_pct: lastPrice !== null ? priceDevPct(lastPrice, quote?.mid ?? null, Number(asset?.currentMultiplier ?? 1)) : null,
         swap_count: swaps, age_days: age, vol7_avg_usd: v7.avg, vol7_cv: v7.cv, raw_apr: tvl && tvl > 0 ? fees * 365 / tvl : null,
-        flags, excluded: flags.some(f => f !== 'short_history' && f !== 'swap_fetch_failed') ? 1 : 0 })
+        flags, excluded: flags.some(f => !['short_history', 'swap_fetch_failed', 'tvl_stale'].includes(f)) ? 1 : 0 })
       if (poolsScanned % 25 === 0) log(`pools ${poolsScanned}/${pools.length} (calls ${JSON.stringify(usage.toJSON())})`)
     }
     } else { poolsScanned = (db.prepare('SELECT COUNT(*) c FROM pool_snapshots WHERE date=?').get(date) as any).c; log(`sim-only: ${poolsScanned} snapshots for ${date}`) }
@@ -151,7 +156,35 @@ export async function runDaily(opts: { dbPath?: string; now?: Date; simOnly?: bo
       }
       log(`wash analysis on ${topN.length} pools, ${washExcluded} flagged wash_suspect (traders via ${isAlchemy ? 'alchemy' : 'public rpc'})`)
     }
-    // 7. 摘要
+    // 7. 鏈上頭寸回填（P5）：TRACK_ADDRESS 有設才做，全部唯讀
+    const trackAddr = process.env.TRACK_ADDRESS
+    if (trackAddr) {
+      try {
+        const prpc = makeRpc({ usage })
+        const stockMap = new Map((db.prepare(`SELECT address, symbol FROM tokens WHERE kind='stock'`).all() as { address: string; symbol: string }[]).map(t => [t.address, { tokenSymbol: t.symbol }]))
+        const onchain = await fetchV4Positions(prpc, trackAddr, usage, process.env.ALCHEMY_KEY)
+        const vals = syncPositions(db, onchain, stockMap, now.toISOString())
+        for (const v of vals) {
+          if (v.isNew) {   // 從 mint 交易取真實投入與開倉時間（DECISIONS D29）
+            const oc = onchain.find(o => o.poolId === v.poolId)!
+            const mint = await fetchMintInfo(prpc, oc.tokenId, trackAddr).catch(() => null)
+            if (mint) {
+              const stockIs0 = stockMap.has(oc.currency0); const stockAddr = stockIs0 ? oc.currency0 : oc.currency1
+              const stockRaw = Number(mint.deposits[stockAddr] ?? 0n), usdgRaw = Number(mint.deposits[ADDR.usdg] ?? 0n)
+              const a0 = stockIs0 ? stockRaw : usdgRaw, a1 = stockIs0 ? usdgRaw : stockRaw
+              const sp = sqrtPriceAtMint(oc.liquidity, a0, a1, oc.tickLower, oc.tickUpper)
+              const priceRaw = sp * sp; const price = stockIs0 ? priceRaw * 10 ** (STOCK_DECIMALS - USDG_DECIMALS) : 1 / (priceRaw * 10 ** (USDG_DECIMALS - STOCK_DECIMALS))
+              const deposit = stockRaw / 10 ** STOCK_DECIMALS * price + usdgRaw / 10 ** USDG_DECIMALS
+              setPositionOrigin(db, v.positionId, new Date(mint.ts * 1000).toISOString(), deposit, { mint_tx: mint.txHash, mint_block: mint.block.toString(), mint_price: price, deposit_stock: stockRaw / 10 ** STOCK_DECIMALS, deposit_usdg: usdgRaw / 10 ** USDG_DECIMALS })
+              log(`position ${v.label}: opened ${new Date(mint.ts * 1000).toISOString().slice(0, 16)} deposit $${deposit.toFixed(2)} @ ${price.toFixed(2)}`)
+            }
+          }
+          if (!v.closed || v.isNew) writePositionSnapshot(db, v.positionId, date, v)
+        }
+        log(`positions: ${onchain.length} onchain, ${vals.length} tracked (${vals.filter(v => v.isNew).length} new, ${vals.filter(v => v.closed).length} closed)`)
+      } catch (e) { log(`positions: ${String((e as Error).message).split('\n')[0]}`) }
+    }
+    // 8. 摘要
     const today = db.prepare(`SELECT s.*, p.fee_ppm, t.symbol FROM pool_snapshots s JOIN pools p ON p.pool_id=s.pool_id
       JOIN tokens t ON t.address = CASE WHEN p.stock_is_token0=1 THEN p.token0 ELSE p.token1 END WHERE s.date=?`).all(date) as any[]
     const cands = today.filter(r => !r.excluded).sort((a, b) => (b.score ?? -1) - (a.score ?? -1))
@@ -176,12 +209,13 @@ export async function runDaily(opts: { dbPath?: string; now?: Date; simOnly?: bo
 const isMain = process.argv[1] && import.meta.url.endsWith(process.argv[1].split('/').pop()!)
 if (isMain) runDaily({ simOnly: process.argv.includes('--sim-only') }).catch(e => { console.error(e); process.exit(1) })
 
-/** 摘要的「我的頭寸」列：未關閉的頭寸，淨損益為 pool_hourly 模擬估算（DECISIONS D27），P5 改為每日真實回填 */
+/** 摘要的「我的頭寸」列：未關閉的頭寸。有鏈上快照 → 實際 vs 模擬；否則只有模擬估算（DECISIONS D27/D30） */
 export function formatPositions(list: ReturnType<typeof listPositions>): string[] {
+  const money = (v: number) => `${v >= 0 ? '+' : '−'}$${Math.abs(v).toFixed(2)}`
   return list.filter(p => !p.closed_at).map(p => {
+    const days = p.actual ? Math.max(1, p.actual.days) : p.est ? Math.max(1, Math.round(p.est.hours / 24)) : 0
+    if (p.actual) return `${p.symbol}/USDG ${p.label}  實際 ${money(p.actual.net_usd)} / 模擬 ${p.est ? money(p.est.net_usd) : '—'} (${days}d)  在區間 ${p.actual.in_range ? '✓' : '✗'}`
     if (!p.est) return `${p.symbol}/USDG ${p.label}  無小時資料`
-    const days = Math.max(1, Math.round(p.est.hours / 24))
-    const sign = p.est.net_usd >= 0 ? '+' : '−'
-    return `${p.symbol}/USDG ${p.label}  ${sign}$${Math.abs(p.est.net_usd).toFixed(2)} (${days}d, 估算)  在區間 ${p.est.in_range ? '✓' : '✗'}`
+    return `${p.symbol}/USDG ${p.label}  ${money(p.est.net_usd)} (${days}d, 估算)  在區間 ${p.est.in_range ? '✓' : '✗'}`
   })
 }

@@ -81,3 +81,53 @@ export function updateWash(db: Database.Database, poolId: string, date: string, 
   db.prepare(`UPDATE pool_snapshots SET trader_count=?, top1_share=?, pingpong_ratio=?, lp_trader_overlap=?, lp_overlap_volume_share=?, wash_detail=?, flags=?, excluded=? WHERE pool_id=? AND date=?`)
     .run(m.traderCount, m.top1Share, m.pingpongRatio, m.lpTraderOverlap, m.lpOverlapVolumeShare, JSON.stringify({ topTraders: m.topTraders, hourly: m.hourly, sampled }), JSON.stringify([...new Set(flags)]), excluded, poolId, date)
 }
+
+import type { OnchainPosition } from './sources/positions.js'
+import { stockPriceUsd } from './metrics/price.js'
+import { STOCK_DECIMALS } from '../config/chain.js'
+export interface PositionValuation { positionId: number; poolId: string; label: string; valueUsd: number; feesUsd: number; inRange: boolean; priceUsd: number; rangeLower: number; rangeUpper: number; isNew: boolean; closed: boolean }
+/** 鏈上頭寸同步進 positions 表（notes JSON 記 tokenId），並回傳估值供寫快照與摘要 */
+export function syncPositions(db: Database.Database, list: OnchainPosition[], stockByAddr: Map<string, { tokenSymbol: string }>, nowIso: string): PositionValuation[] {
+  const out: PositionValuation[] = []
+  const seenTokenIds = new Set<string>()
+  const find = db.prepare(`SELECT * FROM positions WHERE json_extract(notes, '$.tokenId') = ?`)
+  for (const p of list) {
+    seenTokenIds.add(p.tokenId)
+    const stockIs0 = p.currency1 === ADDR.usdg && stockByAddr.has(p.currency0), stockIs1 = p.currency0 === ADDR.usdg && stockByAddr.has(p.currency1)
+    if (!stockIs0 && !stockIs1) continue   // 非股票 × USDG 池，不追蹤
+    const stockAddr = stockIs0 ? p.currency0 : p.currency1; const sym = stockByAddr.get(stockAddr)!.tokenSymbol
+    const price = stockPriceUsd(p.sqrtPriceX96, stockIs0)
+    const tickP = (t: number) => { const raw = 1.0001 ** t; const p0 = raw * 10 ** ((stockIs0 ? STOCK_DECIMALS : USDG_DECIMALS) - (stockIs0 ? USDG_DECIMALS : STOCK_DECIMALS)); return stockIs0 ? p0 : 1 / p0 }
+    const [lo, hi] = [tickP(p.tickLower), tickP(p.tickUpper)].sort((a, b) => a - b)
+    const stockAmt = (stockIs0 ? p.amount0 : p.amount1) / 10 ** STOCK_DECIMALS, usdgAmt = (stockIs0 ? p.amount1 : p.amount0) / 10 ** USDG_DECIMALS
+    const stockFee = (stockIs0 ? p.fee0 : p.fee1) / 10 ** STOCK_DECIMALS, usdgFee = (stockIs0 ? p.fee1 : p.fee0) / 10 ** USDG_DECIMALS
+    const valueUsd = stockAmt * price + usdgAmt, feesUsd = stockFee * price + usdgFee
+    const inRange = p.tick >= p.tickLower && p.tick < p.tickUpper
+    let row = find.get(p.tokenId) as any; let isNew = false
+    if (!row) {
+      isNew = true
+      const notes = JSON.stringify({ source: 'onchain', tokenId: p.tokenId, deposit_estimated: true, tickLower: p.tickLower, tickUpper: p.tickUpper })
+      const id = Number(db.prepare(`INSERT INTO positions(pool_id,label,range_lower,range_upper,deposit_usd,opened_at,notes) VALUES (?,?,?,?,?,?,?)`)
+        .run(p.poolId, `${sym} #${p.tokenId.slice(-4)}`, lo, hi, valueUsd + feesUsd, nowIso, notes).lastInsertRowid)
+      row = { id, pool_id: p.poolId, label: `${sym} #${p.tokenId.slice(-4)}`, range_lower: lo, range_upper: hi, closed_at: null }
+    }
+    const closed = p.liquidity === 0n
+    if (closed && !row.closed_at) db.prepare('UPDATE positions SET closed_at=? WHERE id=?').run(nowIso, row.id)
+    if (!closed && row.closed_at) db.prepare('UPDATE positions SET closed_at=NULL WHERE id=?').run(row.id)
+    out.push({ positionId: row.id, poolId: p.poolId, label: row.label, valueUsd, feesUsd, inRange, priceUsd: price, rangeLower: row.range_lower, rangeUpper: row.range_upper, isNew, closed })
+  }
+  return out
+}
+export function writePositionSnapshot(db: Database.Database, positionId: number, date: string, v: { valueUsd: number; feesUsd: number; inRange: boolean }) {
+  db.prepare(`INSERT OR REPLACE INTO position_snapshots(position_id,date,value_usd,fees_cum_usd,in_range,gas_cum_usd) VALUES (?,?,?,?,?,NULL)`).run(positionId, date, v.valueUsd, v.feesUsd, v.inRange ? 1 : 0)
+}
+
+export function setPositionOrigin(db: Database.Database, id: number, openedAtIso: string, depositUsd: number, extraNotes: Record<string, unknown>) {
+  const row = db.prepare('SELECT notes FROM positions WHERE id=?').get(id) as { notes: string | null }
+  const notes = { ...(row?.notes ? JSON.parse(row.notes) : {}), ...extraNotes, deposit_estimated: false }
+  db.prepare('UPDATE positions SET opened_at=?, deposit_usd=?, notes=? WHERE id=?').run(openedAtIso, depositUsd, JSON.stringify(notes), id)
+}
+export function lastKnownTvl(db: Database.Database, poolId: string, beforeDate: string): number | null {
+  const r = db.prepare('SELECT tvl_usd FROM pool_snapshots WHERE pool_id=? AND date<? AND tvl_usd IS NOT NULL ORDER BY date DESC LIMIT 1').get(poolId, beforeDate) as { tvl_usd: number } | undefined
+  return r?.tvl_usd ?? null
+}
