@@ -107,7 +107,7 @@ export async function runDaily(opts: { dbPath?: string; now?: Date; simOnly?: bo
       if (tvlStale) flags.push('tvl_stale')
       writeSnapshot(db, { pool_id: p.pool_id, date, is_weekday: isUsWeekday(now) ? 1 : 0, tvl_usd: tvl, volume_24h_usd: volume, fees_24h_usd: fees, price_usd: lastPrice,
         price_ref_usd: quote?.mid ?? null, price_dev_pct: lastPrice !== null ? priceDevPct(lastPrice, quote?.mid ?? null, Number(asset?.currentMultiplier ?? 1)) : null,
-        swap_count: swaps, fee_ppm_observed: feeObserved, age_days: age, vol7_avg_usd: v7.avg, vol7_cv: v7.cv, raw_apr: tvl && tvl > 0 ? fees * 365 / tvl : null,
+        swap_count: swaps, fee_ppm_observed: feeObserved, vol_6h_usd: hourly.slice(-6).reduce((a, r) => a + r.volumeUsd, 0), vol_1h_usd: hourly.slice(-1).reduce((a, r) => a + r.volumeUsd, 0), age_days: age, vol7_avg_usd: v7.avg, vol7_cv: v7.cv, raw_apr: tvl && tvl > 0 ? fees * 365 / tvl : null,
         flags, excluded: flags.some(f => !['short_history', 'swap_fetch_failed', 'tvl_stale', 'hook_fee_only'].includes(f)) ? 1 : 0 })
       if (poolsScanned % 25 === 0) log(`pools ${poolsScanned}/${pools.length} (calls ${JSON.stringify(usage.toJSON())})`)
     }

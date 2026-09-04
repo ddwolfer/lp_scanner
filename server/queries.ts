@@ -4,6 +4,8 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import { simulateHourly, type SimHour } from '../scanner/metrics/simulate.js'
 import { loadHourly } from '../scanner/steps.js'
 import { rvolRange } from '../scanner/metrics/volatility.js'
+import { lifecycleCost, capacityUsd, volumePersistence } from '../scanner/metrics/economics.js'
+import { loadScoring } from '../config/chain.js'
 
 const POOL_JOIN = `FROM pool_snapshots s JOIN pools p ON p.pool_id = s.pool_id
   JOIN tokens t ON t.address = CASE WHEN p.stock_is_token0 = 1 THEN p.token0 ELSE p.token1 END`
@@ -17,6 +19,7 @@ export interface OverviewRow {
   tvl_usd: number | null; volume_24h_usd: number; fees_24h_usd: number; vol7_avg_usd: number; vol7_cv: number
   trader_count: number | null; top1_share: number | null; price_usd: number | null; price_ref_usd: number | null; price_dev_pct: number | null
   raw_apr: number | null; score: number | null; excluded: number; flags: string[]; sim: any; all_day_tradable: string | null
+  vol_6h_usd: number | null; heat_6h: number | null
   rank_today: number | null; rank_prev: number | null
 }
 function rankMap(db: Database.Database, date: string): Map<string, number> {
@@ -27,8 +30,8 @@ export function getOverview(db: Database.Database, date: string): OverviewRow[] 
   const prevDate = (db.prepare('SELECT MAX(date) d FROM pool_snapshots WHERE date < ?').get(date) as { d: string | null }).d
   const today = rankMap(db, date); const prev = prevDate ? rankMap(db, prevDate) : new Map<string, number>()
   const rows = db.prepare(`SELECT s.pool_id, t.symbol, p.protocol, p.fee_ppm, s.fee_ppm_observed, p.hooks, p.hook_kind, p.hook_flags, s.age_days, s.tvl_usd, s.volume_24h_usd, s.fees_24h_usd, s.vol7_avg_usd, s.vol7_cv,
-      s.trader_count, s.top1_share, s.price_usd, s.price_ref_usd, s.price_dev_pct, s.raw_apr, s.score, s.excluded, s.flags, s.sim, t.all_day_tradable ${POOL_JOIN} WHERE s.date=?`).all(date) as any[]
-  return rows.map(r => ({ ...r, flags: parse(r.flags) ?? [], hook_flags: parse(r.hook_flags) ?? [], sim: parse(r.sim), rank_today: today.get(r.pool_id) ?? null, rank_prev: prev.get(r.pool_id) ?? null }))
+      s.trader_count, s.top1_share, s.price_usd, s.price_ref_usd, s.price_dev_pct, s.raw_apr, s.score, s.excluded, s.flags, s.sim, t.all_day_tradable, s.vol_6h_usd ${POOL_JOIN} WHERE s.date=?`).all(date) as any[]
+  return rows.map(r => ({ ...r, heat_6h: r.vol_6h_usd !== null && r.volume_24h_usd > 0 ? (r.vol_6h_usd / 6) / (r.volume_24h_usd / 24) : null, flags: parse(r.flags) ?? [], hook_flags: parse(r.hook_flags) ?? [], sim: parse(r.sim), rank_today: today.get(r.pool_id) ?? null, rank_prev: prev.get(r.pool_id) ?? null }))
 }
 export function getPool(db: Database.Database, poolId: string) {
   const pool = db.prepare(`SELECT p.*, t.symbol, t.name AS token_name, t.rh_status, t.all_day_tradable, t.current_multiplier, t.address AS stock_address FROM pools p
@@ -44,7 +47,18 @@ export function getPool(db: Database.Database, poolId: string) {
   const curves = simHours.length ? { r10: curve(0.10), r25: curve(0.25), rvol: curve(rvolR) } : null
   const corporateActions = db.prepare('SELECT * FROM corporate_actions WHERE token=? ORDER BY effective_at DESC').all(pool.stock_address)
   const feeStats = latest ? (db.prepare('SELECT MIN(fees_usd/NULLIF(volume_usd,0)) mn, MAX(fees_usd/NULLIF(volume_usd,0)) mx FROM pool_hourly WHERE pool_id=? AND ts>=? AND volume_usd>0').get(poolId, Math.floor(Date.now() / 1000) - 86400) as any) : null
-  return { pool: { ...pool, hook_flags: parse(pool.hook_flags) ?? [] }, snapshots, hourly, curves, corporateActions, latest, feeStats }
+  // D37：成交持續性、生命週期成本、容量
+  const econCfg = loadScoring().economics
+  const vols = (hourly as any[]).map(h => h.volume_usd ?? 0)
+  const lastH = (hourly as any[]).filter(h => h.liquidity && h.price_usd).at(-1)
+  const feeForCost = pool.fee_ppm ?? latest?.fee_ppm_observed ?? null
+  const economics = {
+    heat_1h: volumePersistence(vols, 1), heat_6h: volumePersistence(vols, 6),
+    byDeposit: [200, 1000, 5000].map(D => { const s = latest?.sim?.[`d${D}`]?.r25; const daily = s && s.hours > 0 ? s.fees_usd / (s.hours / 24) : null
+      return { D, cost: lifecycleCost(D, feeForCost, daily, econCfg.gas_usd_per_tx, econCfg.lifecycle_txs), dailyFeeUsd: daily } }),
+    capacity: lastH ? { r10: capacityUsd(lastH.liquidity, lastH.price_usd, 0.10, econCfg.capacity_share), r25: capacityUsd(lastH.liquidity, lastH.price_usd, 0.25, econCfg.capacity_share), share: econCfg.capacity_share, activeLiquidity: lastH.liquidity } : null,
+  }
+  return { pool: { ...pool, hook_flags: parse(pool.hook_flags) ?? [] }, snapshots, hourly, curves, corporateActions, latest, feeStats, economics }
 }
 export interface PositionInput { pool_id: string; label: string; range_lower: number; range_upper: number; deposit_usd: number; opened_at: string; notes?: string }
 export function createPosition(db: Database.Database, i: PositionInput): number {

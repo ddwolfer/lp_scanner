@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS pool_snapshots (
   age_days INTEGER, vol7_avg_usd REAL, vol7_cv REAL,
   raw_apr REAL,                      -- [P1] fees_24h*365/tvl，P1 摘要排序用
   fee_ppm_observed INTEGER,          -- [D36] 動態費率池：當日 swap 費率中位數
+  vol_6h_usd REAL, vol_1h_usd REAL,   -- [D37] 成交持續性
   sim TEXT, score REAL, flags TEXT, excluded INTEGER DEFAULT 0,
   wash_detail TEXT,                  -- [P3] JSON {topTraders, hourly, sampled}
   PRIMARY KEY (pool_id, date)
