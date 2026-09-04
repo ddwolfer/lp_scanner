@@ -6,8 +6,9 @@ export function RankArrow({ today, prev }: { today: number | null; prev: number 
   return <span className={'arrow ' + (prev > today ? 'up' : 'down')}>{prev} {prev > today ? '↑' : '↓'}</span>
 }
 const BAD = new Set(['wash_suspect', 'fake_stock', 'halted', 'corp_action_pending', 'asset_inactive', 'has_hooks', 'fee_out_of_range', 'tvl_too_small', 'too_new', 'not_stock', 'non_usd_quote'])
+const NOISE = ['short_history', 'sigma_from_pool', 'tvl_unknown', 'rvol_fallback', 'wash_sampled', 'tvl_stale']   // 資訊性 flag，總覽不顯示（單池頁 max 大時仍顯示）
 export function FlagChips({ flags, max = 3 }: { flags: string[]; max?: number }) {
-  const f = [...new Set(flags)].filter(x => !['short_history', 'sigma_from_pool', 'tvl_unknown'].includes(x))
+  const f = [...new Set(flags)].filter(x => max >= 8 || !NOISE.includes(x))
   return <>{f.slice(0, max).map(x => <span key={x} className={'chip ' + (BAD.has(x) ? 'bad' : '')}>{x}</span>)}{f.length > max && <span className="chip">+{f.length - max}</span>}</>
 }
 export function PoolName({ symbol, fee_ppm, hooks, protocol }: { symbol: string; fee_ppm: number | null; hooks: string; protocol: string }) {
