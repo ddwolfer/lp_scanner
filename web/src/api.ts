@@ -5,6 +5,7 @@ export type Row = {
   tvl_usd: number | null; volume_24h_usd: number; fees_24h_usd: number; vol7_avg_usd: number; vol7_cv: number
   trader_count: number | null; top1_share: number | null; price_usd: number | null; price_ref_usd: number | null; price_dev_pct: number | null
   raw_apr: number | null; score: number | null; excluded: number; flags: string[]; sim: SimJson | null; all_day_tradable: string | null
+  vol_6h_usd: number | null; heat_6h: number | null
   rank_today: number | null; rank_prev: number | null
 }
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {

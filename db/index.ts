@@ -20,6 +20,8 @@ function migrate(db: Database.Database) {
   const cols = new Set((db.prepare('PRAGMA table_info(pool_snapshots)').all() as { name: string }[]).map(c => c.name))
   if (!cols.has('wash_detail')) db.exec('ALTER TABLE pool_snapshots ADD COLUMN wash_detail TEXT')
   if (!cols.has('fee_ppm_observed')) db.exec('ALTER TABLE pool_snapshots ADD COLUMN fee_ppm_observed INTEGER')
+  if (!cols.has('vol_6h_usd')) db.exec('ALTER TABLE pool_snapshots ADD COLUMN vol_6h_usd REAL')
+  if (!cols.has('vol_1h_usd')) db.exec('ALTER TABLE pool_snapshots ADD COLUMN vol_1h_usd REAL')
   const pcols = new Set((db.prepare('PRAGMA table_info(pools)').all() as { name: string }[]).map(c => c.name))
   if (!pcols.has('hook_kind')) db.exec('ALTER TABLE pools ADD COLUMN hook_kind TEXT')
   if (!pcols.has('hook_flags')) db.exec('ALTER TABLE pools ADD COLUMN hook_flags TEXT')

@@ -42,13 +42,13 @@ export function writeHourly(db: Database.Database, poolId: string, rows: HourlyR
 }
 export interface SnapshotRow {
   pool_id: string; date: string; is_weekday: number; tvl_usd: number | null; volume_24h_usd: number; fees_24h_usd: number
-  price_usd: number | null; price_ref_usd: number | null; price_dev_pct: number | null; swap_count: number; fee_ppm_observed?: number | null
+  price_usd: number | null; price_ref_usd: number | null; price_dev_pct: number | null; swap_count: number; fee_ppm_observed?: number | null; vol_6h_usd?: number | null; vol_1h_usd?: number | null
   age_days: number | null; vol7_avg_usd: number; vol7_cv: number; raw_apr: number | null; flags: string[]; excluded: number
 }
 export function writeSnapshot(db: Database.Database, r: SnapshotRow) {
-  db.prepare(`INSERT OR REPLACE INTO pool_snapshots(pool_id,date,is_weekday,tvl_usd,volume_24h_usd,fees_24h_usd,price_usd,price_ref_usd,price_dev_pct,swap_count,fee_ppm_observed,age_days,vol7_avg_usd,vol7_cv,raw_apr,flags,excluded)
-    VALUES (@pool_id,@date,@is_weekday,@tvl_usd,@volume_24h_usd,@fees_24h_usd,@price_usd,@price_ref_usd,@price_dev_pct,@swap_count,@fee_ppm_observed,@age_days,@vol7_avg_usd,@vol7_cv,@raw_apr,@flags,@excluded)`)
-    .run({ fee_ppm_observed: null, ...r, flags: JSON.stringify(r.flags) })
+  db.prepare(`INSERT OR REPLACE INTO pool_snapshots(pool_id,date,is_weekday,tvl_usd,volume_24h_usd,fees_24h_usd,price_usd,price_ref_usd,price_dev_pct,swap_count,fee_ppm_observed,vol_6h_usd,vol_1h_usd,age_days,vol7_avg_usd,vol7_cv,raw_apr,flags,excluded)
+    VALUES (@pool_id,@date,@is_weekday,@tvl_usd,@volume_24h_usd,@fees_24h_usd,@price_usd,@price_ref_usd,@price_dev_pct,@swap_count,@fee_ppm_observed,@vol_6h_usd,@vol_1h_usd,@age_days,@vol7_avg_usd,@vol7_cv,@raw_apr,@flags,@excluded)`)
+    .run({ fee_ppm_observed: null, vol_6h_usd: null, vol_1h_usd: null, ...r, flags: JSON.stringify(r.flags) })
 }
 export function previousCandidates(db: Database.Database, date: string): Set<string> {
   const prev = db.prepare('SELECT MAX(date) d FROM pool_snapshots WHERE date < ?').get(date) as { d: string | null }

@@ -7,5 +7,6 @@
     "wash_overlap_volume_share": 0.5
   },
   "wash_analysis_top_n": 20,
-  "scan": { "swap_fetch_min_tvl_usd": 1000, "wash_sample_swaps": 800 }
+  "scan": { "swap_fetch_min_tvl_usd": 1000, "wash_sample_swaps": 800 },
+  "economics": { "gas_usd_per_tx": 0.6, "lifecycle_txs": 4, "capacity_share": 0.10 }
 }

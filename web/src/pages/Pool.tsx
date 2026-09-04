@@ -10,7 +10,7 @@ export default function Pool() {
   useEffect(() => { api<any>(`/api/pool/${id}`).then(setD).catch(e => setErr(String(e))) }, [id])
   if (err) return <p className="neg">{err}</p>
   if (!d) return <p className="muted">載入中…</p>
-  const { pool, snapshots, hourly, curves, corporateActions, latest, feeStats } = d
+  const { pool, snapshots, hourly, curves, corporateActions, latest, feeStats, economics } = d
   const hookKind: string = pool.hook_kind ?? (pool.hooks === ZERO ? 'none' : 'liquidity'); const hookFlags: string[] = pool.hook_flags ?? []
   const sim = latest?.sim; const wash = latest?.wash_detail
   const pending = corporateActions.filter((c: any) => c.status.includes('IN_PROGRESS'))
@@ -44,6 +44,19 @@ export default function Pool() {
       <div className="charts">{HOOK_GROUPS.map(g => <div key={g.zh}><div className="muted" style={{ fontSize: 13, marginBottom: 4 }}>{g.zh} <span className="chip">{g.note}</span></div>
         {g.keys.map(k => <div key={k} style={{ fontSize: 15, lineHeight: 1.7 }}><span className={hookFlags.includes(k) ? (g.keys === HOOK_GROUPS[0].keys ? 'warn' : 'neg') : 'muted'}>{hookFlags.includes(k) ? '✓' : '·'} {HOOK_ZH[k]}</span></div>)}</div>)}</div>
       {pool.fee_ppm === null && <div className="muted" style={{ marginTop: 8 }}>動態費率，今日觀察：中位數 {latest?.fee_ppm_observed !== null && latest?.fee_ppm_observed !== undefined ? (latest.fee_ppm_observed / 1e4).toFixed(2) + '%' : '—'}{feeStats?.mn ? `，範圍 ${(feeStats.mn * 100).toFixed(2)}% 到 ${(feeStats.mx * 100).toFixed(2)}%（由小時手續費 ÷ 成交量估）` : ''}</div>}
+    </div>}
+    {economics && <div className="card" style={{ marginTop: 12 }}>
+      <h2 style={{ margin: '0 0 8px' }}>值不值得進：成交持續性 · 進出成本 · 容量</h2>
+      <div className="charts">
+        <div><dl className="kv">
+          <dt>最近 1h 成交速率 ÷ 全天</dt><dd className={economics.heat_1h === null ? '' : economics.heat_1h >= 1 ? 'pos' : economics.heat_1h < 0.5 ? 'neg' : ''}>{economics.heat_1h === null ? '—' : economics.heat_1h.toFixed(2) + '×'}</dd>
+          <dt>最近 6h 成交速率 ÷ 全天</dt><dd className={economics.heat_6h === null ? '' : economics.heat_6h >= 1 ? 'pos' : economics.heat_6h < 0.5 ? 'neg' : ''}>{economics.heat_6h === null ? '—' : economics.heat_6h.toFixed(2) + '×'}</dd>
+          <dt>容量（佔 active liquidity {Math.round((economics.capacity?.share ?? 0.1) * 100)}%）</dt><dd>±10%：{fmtUsd(economics.capacity?.r10)} · ±25%：{fmtUsd(economics.capacity?.r25)}</dd>
+        </dl><div className="muted" style={{ fontSize: 13, marginTop: 6 }}>熱度 &lt; 0.5× 表示昨天的量已經冷掉，24h 數字高估現在的收益。容量以上的投入會把自己的份額稀釋到不划算。</div></div>
+        <div><table className="grid"><thead><tr><th className="l">投入</th><th>進場 swap</th><th>出場 swap</th><th>gas ×4</th><th>合計成本</th><th>每日手續費估</th><th>回本天數</th></tr></thead><tbody>
+          {economics.byDeposit.map((b: any) => <tr key={b.D}><td className="l num">${b.D}</td><td className="num">{fmtUsd(b.cost.swapInUsd, 2)}</td><td className="num">{fmtUsd(b.cost.swapOutUsd, 2)}</td><td className="num">{fmtUsd(b.cost.gasUsd, 2)}</td><td className="num">{fmtUsd(b.cost.totalUsd, 2)}</td><td className="num">{fmtUsd(b.dailyFeeUsd, 2)}</td><td className={'num ' + (b.cost.breakevenDays === null ? '' : b.cost.breakevenDays <= 2 ? 'pos' : b.cost.breakevenDays > 7 ? 'neg' : 'warn')}>{b.cost.breakevenDays === null ? '—' : b.cost.breakevenDays.toFixed(1)}</td></tr>)}
+        </tbody></table><div className="muted" style={{ fontSize: 13, marginTop: 6 }}>每日手續費估 = ±25% 模擬的手續費速率。回本天數 &gt; 7 天的倉位，放一週還是負的。</div></div>
+      </div>
     </div>}
     <h2>30 天 TVL / 成交量 / 手續費</h2>
     <div className="charts">
