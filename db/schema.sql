@@ -44,6 +44,12 @@ CREATE TABLE IF NOT EXISTS scan_runs (
   id INTEGER PRIMARY KEY, started_at TEXT, finished_at TEXT, ok INTEGER,
   pools_scanned INTEGER, api_calls TEXT, error TEXT
 );
+-- [P5] 頭寸日誌：使用者手寫的開倉理由、中途動作、關倉檢討
+CREATE TABLE IF NOT EXISTS position_journal (
+  id INTEGER PRIMARY KEY, position_id INTEGER REFERENCES positions(id), ts TEXT,
+  kind TEXT,        -- 'open' | 'note' | 'adjust' | 'collect' | 'close' | 'review'
+  text TEXT, data TEXT
+);
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);  -- [P1] last_discovery_block 等
 CREATE INDEX IF NOT EXISTS idx_snap_date ON pool_snapshots(date);
 CREATE INDEX IF NOT EXISTS idx_hourly_pool_ts ON pool_hourly(pool_id, ts);

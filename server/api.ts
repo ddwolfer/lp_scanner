@@ -2,9 +2,10 @@
 import type { FastifyInstance } from 'fastify'
 import type Database from 'better-sqlite3'
 import { z } from 'zod'
-import { getDates, getOverview, getPool, listPositions, createPosition, closePosition } from './queries.js'
+import { getDates, getOverview, getPool, listPositions, createPosition, closePosition, addJournal, exportPositions } from './queries.js'
 import { loadScoring } from '../config/chain.js'
 const PositionSchema = z.object({ pool_id: z.string().min(3), label: z.string().min(1), range_lower: z.number().positive(), range_upper: z.number().positive(), deposit_usd: z.number().positive(), opened_at: z.string().min(10), notes: z.string().optional() })
+const JournalSchema = z.object({ kind: z.enum(['open', 'note', 'adjust', 'collect', 'close', 'review']), text: z.string().min(1), data: z.unknown().optional() })
 const CloseSchema = z.object({ closed_at: z.string().min(10), fees_final_usd: z.number().min(0), value_final_usd: z.number().min(0) })
 export function registerApi(app: FastifyInstance, db: Database.Database) {
   app.get('/api/dates', async () => getDates(db))
@@ -24,6 +25,10 @@ export function registerApi(app: FastifyInstance, db: Database.Database) {
   app.patch<{ Params: { id: string } }>('/api/positions/:id/close', async (req, reply) => {
     const p = CloseSchema.safeParse(req.body); if (!p.success) return reply.code(400).send({ error: p.error.flatten() })
     closePosition(db, Number(req.params.id), p.data); return { ok: true }
+  })
+  app.post<{ Params: { id: string } }>('/api/positions/:id/journal', async (req, reply) => {
+    const p = JournalSchema.safeParse(req.body); if (!p.success) return reply.code(400).send({ error: p.error.flatten() })
+    const id = addJournal(db, Number(req.params.id), p.data.kind, p.data.text, p.data.data); exportPositions(db, 'data/positions'); return { id }
   })
   app.get('/api/scan-runs', async () => db.prepare('SELECT id, started_at, finished_at, ok, pools_scanned, api_calls, substr(error,1,200) error FROM scan_runs ORDER BY id DESC LIMIT 14').all())
 }

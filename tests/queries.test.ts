@@ -1,6 +1,7 @@
 import { it, expect } from 'vitest'
 import { openDb } from '../db/index.js'
-import { getDates, getOverview, getPool, createPosition, closePosition, listPositions } from '../server/queries.js'
+import { getDates, getOverview, getPool, createPosition, closePosition, listPositions, addJournal, listJournal, exportPositions } from '../server/queries.js'
+import { readFileSync, rmSync } from 'node:fs'
 import { writeSnapshot, writeHourly, updateSim } from '../scanner/steps.js'
 function seed() {
   const db = openDb(':memory:')
@@ -33,4 +34,17 @@ it('頭寸建立、估算、關閉', () => {
   expect(p.id).toBe(id); expect(p.est!.in_range).toBe(true); expect(p.est!.fees_cum_usd).toBeGreaterThan(0); expect(p.curve).toHaveLength(3)
   closePosition(db, id, { closed_at: '2026-09-02T00:00:00Z', fees_final_usd: 5, value_final_usd: 990 })
   expect(listPositions(db)[0].final).toEqual({ value_usd: 990, fees_cum_usd: 5 })
+})
+
+it('日誌與 JSON 匯出', () => {
+  const db = seed()
+  const id = createPosition(db, { pool_id: '0x1', label: 'j', range_lower: 7.5, range_upper: 12.5, deposit_usd: 1000, opened_at: '2026-09-01T00:00:00Z' })
+  addJournal(db, id, 'open', '看報告排第一，區間 ±25%', { rank: 1 })
+  expect(listJournal(db, id)[0]).toMatchObject({ kind: 'open', data: { rank: 1 } })
+  const dir = '/private/tmp/claude-501/-Users-pochenkuo-AI-lp-scanner/3221afde-47cf-42bb-8108-dd8ee7c30d12/scratchpad/export-test'
+  const files = exportPositions(db, dir)
+  expect(files).toHaveLength(1)
+  const j = JSON.parse(readFileSync(files[0], 'utf8'))
+  expect(j.label).toBe('j'); expect(j.journal).toHaveLength(1); expect(j.range_usd).toEqual([7.5, 12.5])
+  rmSync(dir, { recursive: true, force: true })
 })

@@ -4,3 +4,4 @@ db/*.sqlite-*
 .env
 dist/
 logs/
+data/positions/*.json
