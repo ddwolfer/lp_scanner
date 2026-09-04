@@ -1,6 +1,6 @@
 # lp_scanner
 
-Robinhood Chain（chainId 4663）上「股票代幣 × USDG」Uniswap v4 流動性池的每日掃描器與 dashboard。**純唯讀**：不簽任何交易、不碰私鑰，只讀鏈上資料與公開 API。
+Robinhood Chain（chainId 4663）上「股票代幣 × USDG」Uniswap v4 與 v3 流動性池的每日掃描器與 dashboard。**純唯讀**：不簽任何交易、不碰私鑰，只讀鏈上資料與公開 API。
 
 - 規格：`SPEC.md`（§2 目標、§7 模擬公式、§10 安全邊界不可更動）
 - 所有驗證結果與設計決策：`DECISIONS.md`（權威來源，遇到「為什麼這樣做」先看這裡）
@@ -9,7 +9,7 @@ Robinhood Chain（chainId 4663）上「股票代幣 × USDG」Uniswap v4 流動�
 ## 它每天做什麼（07:30 Asia/Taipei）
 
 1. 拉 Robinhood `/rhj/assets` 白名單（194 檔股票代幣）、`/prices`、`/corporate-actions`
-2. 從鏈上 `Initialize` 事件增量發現新池，只收「股票 × USDG」
+2. 從鏈上 v4 `Initialize` 與 v3 `PoolCreated` 事件增量發現新池，只收「股票 × USDG」
 3. 對通過預篩的池拉當日 `Swap` log，自算每小時價格 / 成交量 / 手續費 / 池流動性（`pool_hourly`）
 4. TVL 來自 DexScreener；算衍生指標；§8.1 硬排除（費率、hooks、太新、太小、公司行動、停牌、刷量）
 5. §7 模擬：三種投入 × 三種區間，逐小時算手續費份額、IL、淨損益、在區間比例
@@ -64,6 +64,7 @@ Dashboard：`http://<mac-ip>:3000`，綁 `0.0.0.0`，無登入，只在區網用
 pnpm test && pnpm typecheck      # 65 個單元測試（含 SPEC §7.4 三個模擬驗證）
 pnpm scan --sim-only             # 不重抓資料，只重跑模擬 / 評分 / 刷量 / 頭寸（改 config/scoring.json 後用）
 pnpm sim-check <poolId> [D=1000] [R=0.25] [from] [to]   # 逐小時模擬表格，供人工對照 Uniswap 介面
+pnpm positions                   # 立刻同步 TRACK_ADDRESS 的鏈上頭寸（v3 + v4），開完倉不用等隔天
 pnpm probe-alchemy               # 測 Alchemy key 的 getLogs 範圍限制
 pnpm web:dev                     # 前端開發（Vite 5173，/api proxy 到 3000）
 ```

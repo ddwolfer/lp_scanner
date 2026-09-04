@@ -7,6 +7,7 @@ import { makeRpc } from './sources/rpc.js'
 import { fetchAssets, fetchCorporateActions, fetchPrice, type RhQuote } from './sources/robinhood.js'
 import { fetchTokenPairs } from './sources/dexscreener.js'
 import { discoverUsdgPools, fetchSwaps } from './sources/uniswapV4.js'
+import { discoverV3UsdgPools, fetchV3Swaps, fetchV3LiquidityEvents } from './sources/uniswapV3.js'
 import { aggregateHourly } from './metrics/hourly.js'
 import { ageDays, vol7, priceDevPct } from './metrics/derived.js'
 import { hardExclusions } from './metrics/exclusions.js'
@@ -49,11 +50,11 @@ export async function runDaily(opts: { dbPath?: string; now?: Date; simOnly?: bo
     const lastDisc = getMeta(db, 'last_discovery_block')
     const from = lastDisc ? BigInt(lastDisc) + 1n : latest - BigInt(30 * CHAIN.blocksPerDay)
     if (!lastDisc) log('尚未 backfill，只掃最近 30 天的 Initialize；請跑 pnpm backfill 補齊')
-    const found = await discoverUsdgPools(rpc, from, latest)
+    const found = [...await discoverUsdgPools(rpc, from, latest), ...await discoverV3UsdgPools(rpc, from, latest)]
     const blockTs = new Map<string, string>()
     for (const p of found) if (isStockUsdgPool(p, stockSet) && !blockTs.has(p.createdBlock.toString()))
       blockTs.set(p.createdBlock.toString(), new Date(Number((await rpc.call(() => rpc.client.getBlock({ blockNumber: p.createdBlock }))).timestamp) * 1000).toISOString())
-    log(`discovery ${from}→${latest}: ${found.length} usdg pools, ${upsertPools(db, found, stockSet, blockTs)} new stock pools`)
+    log(`discovery ${from}→${latest}: ${found.length} usdg pools (v3 ${found.filter(f => f.protocol === 'v3').length}), ${upsertPools(db, found, stockSet, blockTs)} new stock pools`)
     setMeta(db, 'last_discovery_block', latest.toString())
     // 3. TVL（DexScreener）與參考價（Robinhood）
     const pools = db.prepare('SELECT * FROM pools').all() as any[]
@@ -82,7 +83,7 @@ export async function runDaily(opts: { dbPath?: string; now?: Date; simOnly?: bo
       if (worth) swapPools++
       let hourly: ReturnType<typeof aggregateHourly> = []; let swapFetchFailed = false
       if (worth) {
-        try { hourly = aggregateHourly(await fetchSwaps(rpc, p.pool_id, dayFrom, latest), interp, !!p.stock_is_token0, tsFrom, tsTo) }
+        try { const sw = p.protocol === 'v3' ? await fetchV3Swaps(rpc, p.pool_id, p.fee_ppm, dayFrom, latest) : await fetchSwaps(rpc, p.pool_id, dayFrom, latest); hourly = aggregateHourly(sw, interp, !!p.stock_is_token0, tsFrom, tsTo) }
         catch (e) { swapFetchFailed = true; log(`swaps ${p.pool_id.slice(0, 10)}: ${String((e as Error).message).split('\n')[0]}`) }
       }
       if (hourly.length) writeHourly(db, p.pool_id, hourly)
@@ -131,8 +132,8 @@ export async function runDaily(opts: { dbPath?: string; now?: Date; simOnly?: bo
       for (const id of topN) {
         const p = poolInfo.get(id); if (!p) continue
         try {
-          let swaps = await fetchSwaps(wrpc, id, dayFromW, latestW)
-          const lps = await fetchModifyLiquidity(wrpc, id, dayFromW, latestW)
+          let swaps = p.protocol === 'v3' ? await fetchV3Swaps(wrpc, id, p.fee_ppm, dayFromW, latestW) : await fetchSwaps(wrpc, id, dayFromW, latestW)
+          const lps = p.protocol === 'v3' ? await fetchV3LiquidityEvents(wrpc, id, dayFromW, latestW) : await fetchModifyLiquidity(wrpc, id, dayFromW, latestW)
           const total = swaps.length; const sampled = swaps.length > SAMPLE; if (sampled) swaps = swaps.slice(-SAMPLE)   // DECISIONS D25：只取最新 N 筆
           const fromMap = await resolveTxFrom(trpc, [...swaps.map(s => s.txHash), ...lps.map(l => l.txHash)])
           const stockIs0 = !!p.stock_is_token0
@@ -159,11 +160,11 @@ export async function runDaily(opts: { dbPath?: string; now?: Date; simOnly?: bo
     const trackAddr = process.env.TRACK_ADDRESS
     if (trackAddr) { try { await runPositionsStage(db, usage, trackAddr, date, now, log) } catch (e) { log(`positions: ${String((e as Error).message).split('\n')[0]}`) } }
     // 8. 摘要
-    const today = db.prepare(`SELECT s.*, p.fee_ppm, t.symbol FROM pool_snapshots s JOIN pools p ON p.pool_id=s.pool_id
+    const today = db.prepare(`SELECT s.*, p.fee_ppm, p.protocol, t.symbol FROM pool_snapshots s JOIN pools p ON p.pool_id=s.pool_id
       JOIN tokens t ON t.address = CASE WHEN p.stock_is_token0=1 THEN p.token0 ELSE p.token1 END WHERE s.date=?`).all(date) as any[]
     const cands = today.filter(r => !r.excluded).sort((a, b) => (b.score ?? -1) - (a.score ?? -1))
     const prev = previousCandidates(db, date); const cur = new Set(cands.map(c => c.pool_id))
-    const label = (r: any) => `${r.symbol}/USDG v4`
+    const label = (r: any) => `${r.symbol}/USDG ${r.protocol}`
     const changes = [...today.filter(r => prev.has(r.pool_id) && !cur.has(r.pool_id)).map(r => ({ label: label(r), kind: 'dropped' as const, reason: JSON.parse(r.flags).join(',') })),
                      ...cands.filter(r => !prev.has(r.pool_id) && prev.size > 0).map(r => ({ label: label(r), kind: 'added' as const }))]
     const text = formatDailySummary({ date, weekdayZh: WEEKDAY_ZH[new Date(date + 'T00:00:00+08:00').getDay()], poolsScanned, candidates: cands.length, sortKey: scoring.sort_key,
