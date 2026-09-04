@@ -18,7 +18,7 @@ export default function Pool() {
   return <>
     <p className="muted"><Link to="/">← 總覽</Link></p>
     <h1><span className="sym">{pool.symbol}</span>/USDG <span className="chip">{pool.protocol}</span> <span className="chip num">{pool.fee_ppm === null ? '動態費率' : (pool.fee_ppm / 1e4).toFixed(3) + '%'}</span>{pool.hooks !== ZERO && <span className="chip hooks">hooks {pool.hooks.slice(0, 10)}</span>}</h1>
-    <div className="muted num" style={{ fontSize: 11 }}>{pool.pool_id}</div>
+    <div className="muted num" style={{ fontSize: 14 }}>{pool.pool_id}</div>
     {pending.length > 0 && <div className="alert">⚠️ 公司行動進行中：{pending.map((c: any) => `${c.type.replace('CORPORATE_ACTION_TYPE_', '')} ${c.effective_at}`).join('、')}</div>}
     <div className="cards" style={{ marginTop: 10 }}>
       <div className="card"><dl className="kv">
@@ -52,7 +52,7 @@ export default function Pool() {
       <div className="card"><h2 style={{ margin: '0 0 6px' }}>刷量分析{wash?.sampled && <span className="chip">取樣</span>}</h2>
         {wash ? <><dl className="kv"><dt>交易者</dt><dd>{latest.trader_count}</dd><dt>top1 佔比</dt><dd>{fmtPct(latest.top1_share)}</dd><dt>對打比例</dt><dd>{fmtPct(latest.pingpong_ratio)}</dd><dt>LP 重疊</dt><dd>{latest.lp_trader_overlap} 個地址，成交量 {fmtPct(latest.lp_overlap_volume_share)}</dd></dl>
           <table className="grid" style={{ marginTop: 8 }}><thead><tr><th className="l">地址</th><th>筆數</th><th>買/賣</th><th>佔比</th></tr></thead><tbody>{wash.topTraders.map((t: any) => <tr key={t.addr}><td className="l num">{t.addr.slice(0, 10)}…{t.addr.slice(-4)}</td><td className="num">{t.n}</td><td className="num">{t.buy}/{t.sell}</td><td className="num">{fmtPct(t.share, 1)}</td></tr>)}</tbody></table>
-          <div className="num muted" style={{ fontSize: 10, marginTop: 8, lineHeight: 1.6 }}>{Object.entries(wash.hourly).map(([h, n]) => <div key={h}>{h.slice(5)} {'█'.repeat(Math.min(Number(n), 60))} {String(n)}</div>)}</div></> : <span className="muted">只有前 20 名池有刷量分析</span>}
+          <div className="num muted" style={{ fontSize: 13, marginTop: 8, lineHeight: 1.6 }}>{Object.entries(wash.hourly).map(([h, n]) => <div key={h}>{h.slice(5)} {'█'.repeat(Math.min(Number(n), 60))} {String(n)}</div>)}</div></> : <span className="muted">只有前 20 名池有刷量分析</span>}
       </div>
       <div className="card"><h2 style={{ margin: '0 0 6px' }}>公司行動</h2>
         {corporateActions.length ? <table className="grid"><thead><tr><th className="l">類型</th><th className="l">狀態</th><th>生效日</th><th>multiplier</th></tr></thead><tbody>{corporateActions.map((c: any) => <tr key={c.id}><td className="l">{c.type.replace('CORPORATE_ACTION_TYPE_', '')}</td><td className="l">{c.status.replace('CORPORATE_ACTION_STATUS_', '')}</td><td className="num">{c.effective_at}</td><td className="num">{c.pending_multiplier || '—'}</td></tr>)}</tbody></table> : <span className="muted">無</span>}

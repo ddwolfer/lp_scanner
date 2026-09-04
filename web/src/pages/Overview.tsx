@@ -12,8 +12,8 @@ export default function Overview() {
   const [all, setAll] = useState(false); const [sort, setSort] = useState<{ key: string; dir: 1 | -1 }>({ key: 'score', dir: -1 })
   const [err, setErr] = useState('')
   const width = useWidth(); const [layout, setLayout] = useState<'auto' | 'full' | 'compact'>('auto')
-  const compact = layout === 'auto' ? width < 1280 : layout === 'compact'
-  const tight = compact && width < 720   // 直式螢幕 + 瀏覽器 200% 縮放：CSS 寬度只剩 ~540px，只留三欄
+  const compact = layout === 'auto' ? width < 1900 : layout === 'compact'
+  const tight = compact && width < 1100   // 直式螢幕 + 瀏覽器 200% 縮放：CSS 寬度只剩 ~540px，只留三欄
   useEffect(() => { api<string[]>('/api/dates').then(d => { setDates(d); setDate(d[0] ?? '') }).catch(e => setErr(String(e))) }, [])
   useEffect(() => { if (!date) return; api<{ rows: Row[] }>(`/api/overview?date=${date}`).then(r => setRows(r.rows)).catch(e => setErr(String(e))) }, [date])
   const cols: Col[] = useMemo(() => [
