@@ -43,7 +43,7 @@ export function makeRpc(o: { usage: ApiUsage; url?: string; concurrency?: number
         catch (e) {
           const msg = String((e as Error).message ?? e)
           // public RPC 對 getLogs 有突發限流（DECISIONS 11.5）；最多 8 次退避，上限 30 秒
-          if (attempt < 8 && /429|Too Many|timeout|timed out|ECONNRESET|fetch failed|503|502/i.test(msg)) { await sleep(Math.min(30_000, 1000 * 2 ** attempt) + Math.random() * 500); continue }
+          if (attempt < 8 && /429|Too Many|compute units|exceeded|timeout|timed out|ECONNRESET|fetch failed|503|502/i.test(msg)) { await sleep(Math.min(30_000, 1000 * 2 ** attempt) + Math.random() * 500); continue }
           throw e
         }
       }
