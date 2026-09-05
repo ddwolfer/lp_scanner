@@ -45,7 +45,7 @@ export default function Positions() {
     </form>
     {err && <p className="neg">{err}</p>}
     <h2>頭寸（{list.length}）</h2>
-    <div className="cards">
+    <div className="cards two">
       {list.map(p => <div className="card" key={p.id}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
           <b>{p.label}</b>{p.notes_json?.source === 'onchain' && <span className="chip" style={{ marginLeft: 6 }}>鏈上</span>}<Link to={`/pool/${p.pool_id}`}>{p.symbol}/USDG {(p.fee_ppm / 1e4).toFixed(2)}%</Link>
@@ -80,9 +80,9 @@ export default function Positions() {
           {(p.journal ?? []).map((j: any) => <div key={j.id} style={{ fontSize: 12, marginBottom: 6 }}><span className="chip">{KINDS.find(k => k[0] === j.kind)?.[1] ?? j.kind}</span><span className="muted num" style={{ fontSize: 13, marginRight: 6 }}>{j.ts.slice(0, 16).replace('T', ' ')}</span>{j.text}
             {j.data?.images?.length > 0 && <div style={{ display: 'flex', gap: 6, marginTop: 4, flexWrap: 'wrap' }}>{j.data.images.map((im: string) => <a key={im} href={`/api/journal-image/${im}`} target="_blank" rel="noreferrer"><img src={`/api/journal-image/${im}`} style={{ height: 90, borderRadius: 4, border: '1px solid var(--line-2)' }} /></a>)}</div>}
           </div>)}
-          <div style={{ display: 'flex', gap: 6, marginTop: 6, alignItems: 'center' }}>
+          <div className="journal-row">
             <select value={jKind[p.id] ?? 'note'} onChange={e => setJKind({ ...jKind, [p.id]: e.target.value })}>{KINDS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select>
-            <input style={{ flex: 1 }} placeholder="打字，或直接 Ctrl+V 貼截圖…" value={jText[p.id] ?? ''} onChange={e => setJText({ ...jText, [p.id]: e.target.value })} onKeyDown={e => e.key === 'Enter' && addNote(p.id)} onPaste={e => onPaste(p.id, e)} />
+            <input placeholder="打字，或直接 Ctrl+V 貼截圖…" value={jText[p.id] ?? ''} onChange={e => setJText({ ...jText, [p.id]: e.target.value })} onKeyDown={e => e.key === 'Enter' && addNote(p.id)} onPaste={e => onPaste(p.id, e)} />
             <label className="ghost" style={{ padding: '5px 10px', cursor: 'pointer' }}>選圖<input type="file" accept="image/*" multiple style={{ display: 'none' }} onChange={e => e.target.files && readFiles(p.id, e.target.files)} /></label>
             <button className="ghost" onClick={() => addNote(p.id)}>記錄</button>
           </div>
