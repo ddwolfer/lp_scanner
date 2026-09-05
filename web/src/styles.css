@@ -70,8 +70,16 @@ form.pos-form label { display: flex; flex-direction: column; gap: 3px; font-size
   form.pos-form { grid-template-columns: repeat(2, minmax(120px, 1fr)) }
   form.pos-form label[style] { grid-column: span 2 !important }
 }
-table.compact td { height: auto; padding: 5px 8px 6px; white-space: normal }
-table.compact .sub { display: block; font-family: var(--mono); font-size: 14px; color: var(--fg-3); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis }
+/* 精簡模式一律固定欄寬：池欄吃剩餘寬度並允許換行，右側欄位永遠看得到 */
+table.compact { table-layout: fixed; width: 100% }
+table.compact th:nth-child(1), table.compact td:nth-child(1) { width: 52px }
+table.compact th:nth-child(2), table.compact td:nth-child(2) { width: 64px }
+table.compact th:nth-child(4), table.compact td:nth-child(4) { width: 150px }
+table.compact th:nth-child(5), table.compact td:nth-child(5) { width: 84px }
+table.compact th:nth-child(6), table.compact td:nth-child(6) { width: 80px }
+table.compact td { height: auto; padding: 5px 8px 6px; white-space: normal; vertical-align: top }
+table.compact td.l a { white-space: nowrap }
+table.compact .sub { display: block; font-family: var(--mono); font-size: 14px; color: var(--fg-3); margin-top: 2px; white-space: normal; overflow-wrap: anywhere; line-height: 1.5 }
 table.compact .sub b { color: var(--fg-2); font-weight: 500 }
 table.compact th.sub-h { text-align: left }
 
@@ -91,8 +99,9 @@ table.compact.tight td:last-child { min-width: 120px }
 
 /* ---- 極窄模式：固定欄寬，任何內容都不能把表撐出畫面 ---- */
 table.compact.tight { table-layout: fixed; width: 100% }
-table.compact.tight th:first-child, table.compact.tight td:first-child { width: 56px }
-table.compact.tight th:last-child, table.compact.tight td:last-child { width: 150px; white-space: normal }
+table.compact.tight th:nth-child(1), table.compact.tight td:nth-child(1) { width: 56px }
+table.compact.tight th:nth-child(2), table.compact.tight td:nth-child(2) { width: auto }
+table.compact.tight th:nth-child(3), table.compact.tight td:nth-child(3) { width: 170px; white-space: normal }
 table.compact.tight td.l { white-space: normal; overflow-wrap: anywhere }
 table.compact.tight td.l a { white-space: nowrap }
 table.compact.tight .sub { white-space: normal; overflow-wrap: anywhere; line-height: 1.55 }
