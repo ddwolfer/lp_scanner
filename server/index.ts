@@ -14,7 +14,7 @@ const app = Fastify({ logger: { level: 'warn' }, bodyLimit: 30 * 1024 * 1024 }) 
 registerApi(app, db)
 if (existsSync(dist)) {
   // index.html 一律不快取（每次部署後使用者重新整理就拿到新版）；/assets/* 檔名帶 hash，可長期快取
-  await app.register(fastifyStatic, { root: dist, prefix: '/', setHeaders: (res, filePath) => { res.setHeader('Cache-Control', filePath.endsWith('index.html') ? 'no-cache' : 'public, max-age=31536000, immutable') } })
+  await app.register(fastifyStatic, { root: dist, prefix: '/', setHeaders: (res: any, filePath: string) => { res.setHeader('Cache-Control', filePath.endsWith('index.html') ? 'no-cache' : 'public, max-age=31536000, immutable') } })
   const index = () => readFileSync(path.join(dist, 'index.html'), 'utf8')
   app.get('/', async (_req, reply) => reply.header('Cache-Control', 'no-cache').type('text/html').send(index()))
   app.setNotFoundHandler((req, reply) => {
