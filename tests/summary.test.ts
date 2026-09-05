@@ -31,8 +31,9 @@ import { formatPositions } from '../scanner/run.js'
 it('formatPositions 只列未關閉頭寸', () => {
   const rows = [
     { symbol: 'SOFI', label: '#1', closed_at: null, est: { net_usd: 18.4, hours: 168, in_range: true } },
+    { symbol: 'MSTR', label: '#2b', closed_at: null, deposit_usd: 645.45, actual: { fees_cum_usd: 3.87, value_usd: 655.71, net_usd: 14.13, days: 1, in_range: true }, est: { net_usd: 11.34, hours: 10, in_range: true } },
     { symbol: 'IBM', label: '#2', closed_at: '2026-09-01', est: { net_usd: -1, hours: 24, in_range: false } },
     { symbol: 'AMD', label: '#3', closed_at: null, est: null },
   ] as any
-  expect(formatPositions(rows)).toEqual(['SOFI/USDG #1  +$18.40 (7d, 估算)  在區間 ✓', 'AMD/USDG #3  無小時資料'])
+  expect(formatPositions(rows)).toEqual(['SOFI/USDG #1  +$18.40 (7d, 估算)  在區間 ✓', 'MSTR/USDG #2b (1d)  手續費 +$3.87 + 價差 +$10.26 = +$14.13（模擬 +$11.34）  在區間 ✓', 'AMD/USDG #3  無小時資料'])
 })

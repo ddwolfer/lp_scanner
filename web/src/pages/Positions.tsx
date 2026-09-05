@@ -51,16 +51,20 @@ export default function Positions() {
           <b>{p.label}</b>{p.notes_json?.source === 'onchain' && <span className="chip" style={{ marginLeft: 6 }}>鏈上</span>}<Link to={`/pool/${p.pool_id}`}>{p.symbol}/USDG {(p.fee_ppm / 1e4).toFixed(2)}%</Link>
         </div>
         <div className="muted num" style={{ fontSize: 14 }}>{p.opened_at.slice(0, 16)} → {p.closed_at ? p.closed_at.slice(0, 16) : '持有中'} · 區間 {fmtNum(p.range_lower, 2)}–{fmtNum(p.range_upper, 2)} · 投入 {fmtUsd(p.deposit_usd)}</div>
-        {p.actual && !p.final && <>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 8, marginTop: 8 }}>
-            <div><div className="muted" style={{ fontSize: 14 }}>鏈上現值</div><div className="stat">{fmtUsd(p.actual.value_usd, 1)}</div></div>
-            <div><div className="muted" style={{ fontSize: 14 }}>未領手續費</div><div className="stat pos">{fmtUsd(p.actual.fees_cum_usd, 1)}</div></div>
-            <div><div className="muted" style={{ fontSize: 14 }}>實際淨損益</div><div className={'stat ' + (p.actual.net_usd >= 0 ? 'pos' : 'neg')}>{fmtUsd(p.actual.net_usd, 1)}</div></div>
-            <div><div className="muted" style={{ fontSize: 14 }}>實際 − 模擬</div><div className={'stat ' + ((p.est ? p.actual.net_usd - p.est.net_usd : 0) >= 0 ? 'pos' : 'neg')}>{p.est ? fmtUsd(p.actual.net_usd - p.est.net_usd, 1) : '—'}</div></div>
-          </div>
-          <div className="muted" style={{ fontSize: 14, marginTop: 4 }}>{p.actual.in_range ? '✓ 在區間內' : '✗ 出區間'} · 鏈上快照 {p.actual.date} · {p.actual.days} 天{p.actual.deposit_estimated && ' · 投入金額為首次看到時的市值（估）'}</div>
-          {p.history.length > 1 && <ResponsiveContainer width="100%" height={140}><LineChart data={p.history}><CartesianGrid stroke="#262b34" /><XAxis dataKey="date" tickFormatter={(v: string) => v.slice(5)} /><YAxis width={50} tickFormatter={v => '$' + v.toFixed(0)} /><Tooltip /><Legend /><Line type="monotone" dataKey="actual" name="實際淨損益" stroke="#4fd18b" dot /><Line type="monotone" dataKey="sim" name="模擬淨損益" stroke="#f2b135" dot strokeDasharray="4 3" /></LineChart></ResponsiveContainer>}
-        </>}
+        {p.actual && !p.final && (() => {
+          const a = { fee: p.actual.fees_cum_usd, px: p.actual.value_usd - p.deposit_usd, net: p.actual.net_usd }
+          const m = p.est ? { fee: p.est.fees_cum_usd, px: p.est.value_usd - p.deposit_usd, net: p.est.net_usd } : null
+          const cell = (v: number | null | undefined, cls = true) => v === null || v === undefined ? <td className="num">—</td> : <td className={'num ' + (cls ? (v >= 0 ? 'pos' : 'neg') : '')}>{(v >= 0 ? '+' : '−') + '$' + Math.abs(v).toFixed(2)}</td>
+          return <>
+            <table className="grid" style={{ marginTop: 8 }}><thead><tr><th className="l">損益拆解</th><th>實際（鏈上）</th><th>模擬</th><th>實際 − 模擬</th></tr></thead><tbody>
+              <tr><td className="l">手續費（LP 真正賺的）</td>{cell(a.fee)}{cell(m?.fee)}{cell(m ? a.fee - m.fee : null)}</tr>
+              <tr><td className="l">價格損益（持有的股票漲跌 + IL）</td>{cell(a.px)}{cell(m?.px)}{cell(m ? a.px - m.px : null)}</tr>
+              <tr><td className="l"><b>淨損益</b></td>{cell(a.net)}{cell(m?.net)}{cell(m ? a.net - m.net : null)}</tr>
+            </tbody></table>
+            <div className="muted" style={{ fontSize: 13, marginTop: 4 }}>鏈上現值 {fmtUsd(p.actual.value_usd, 2)} · 投入 {fmtUsd(p.deposit_usd, 2)} · {p.actual.in_range ? '✓ 在區間內' : '✗ 出區間'} · 快照 {p.actual.date} · {p.actual.days} 天{p.est && ` · 模擬涵蓋 ${p.est.hours} 小時`}{p.actual.deposit_estimated && ' · 投入金額為首次看到時的市值（估）'}</div>
+            {p.history.length > 1 && <ResponsiveContainer width="100%" height={140}><LineChart data={p.history}><CartesianGrid stroke="#262b34" /><XAxis dataKey="date" tickFormatter={(v: string) => v.slice(5)} /><YAxis width={50} tickFormatter={v => '$' + v.toFixed(0)} /><Tooltip /><Legend /><Line type="monotone" dataKey="actual" name="實際淨損益" stroke="#4fd18b" dot /><Line type="monotone" dataKey="sim" name="模擬淨損益" stroke="#f2b135" dot strokeDasharray="4 3" /></LineChart></ResponsiveContainer>}
+          </>
+        })()}
         {p.final ? <div style={{ marginTop: 8 }}><span className="stat">{fmtUsd(p.final.value_usd + p.final.fees_cum_usd - p.deposit_usd, 1)}<small>實際淨損益（市值 {fmtUsd(p.final.value_usd, 1)} + 手續費 {fmtUsd(p.final.fees_cum_usd, 1)}）</small></span></div>
           : p.actual ? null : p.est ? <>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8, marginTop: 8 }}>

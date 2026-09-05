@@ -33,7 +33,7 @@ export default function Overview() {
     { key: 'top1_share', label: 'top1', get: r => r.top1_share, fmt: v => fmtPct(v) },
     { key: 'price_dev_pct', label: '偏離', get: r => r.price_dev_pct, fmt: v => fmtPct(v, 1), cls: v => v !== null && Math.abs(v) > 0.03 ? 'warn' : '' },
     { key: 'raw_apr', label: '原始 APR', get: r => r.raw_apr, fmt: v => fmtPct(v) },
-    { key: 'net_apr', label: '模擬 net APR', get: r => simOf(r, D, R)?.net_apr_trimmed ?? simOf(r, D, R)?.net_apr ?? null, fmt: v => fmtPct(v), cls: v => v === null ? '' : v >= 0 ? 'pos' : 'neg' },
+    { key: 'net_apr', label: '模擬 net APR ⓘ', get: r => simOf(r, D, R)?.net_apr_trimmed ?? simOf(r, D, R)?.net_apr ?? null, fmt: v => fmtPct(v), cls: v => v === null ? '' : v >= 0 ? 'pos' : 'neg' },
     { key: 'top_hour', label: '單時佔比', get: r => simOf(r, D, R)?.top_hour_share ?? null, fmt: v => fmtPct(v), cls: v => v === null ? '' : v > 0.5 ? 'neg' : v > 0.25 ? 'warn' : '' },
     { key: 'in_range', label: '在區間', get: r => simOf(r, D, R)?.in_range_pct ?? null, fmt: v => fmtPct(v) },
     { key: 'net_usd', label: '淨損益', get: r => simOf(r, D, R)?.net_usd ?? null, fmt: v => fmtUsd(v, 1), cls: v => v === null ? '' : v >= 0 ? 'pos' : 'neg' },
@@ -82,7 +82,7 @@ export default function Overview() {
       <div style={{ marginTop: 6, display: 'flex', gap: 8 }}><button className="primary" onClick={saveWl}>儲存</button><button className="ghost" onClick={() => setWlEdit(false)}>取消</button></div>
     </div>}
     <table className="grid">
-      <thead><tr>{cols.map(c => <th key={c.key} className={(c.left ? 'l ' : '') + (sort.key === c.key ? 'sorted' : '')} onClick={() => setSort(s => ({ key: c.key, dir: s.key === c.key ? (s.dir === 1 ? -1 : 1) : -1 }))}>{c.label}{sort.key === c.key ? (sort.dir === -1 ? ' ▼' : ' ▲') : ''}</th>)}</tr></thead>
+      <thead><tr>{cols.map(c => <th key={c.key} title={c.key === 'net_apr' ? '手續費 + 期末市值 − 投入，再年化。含持有股票的漲跌與 IL，不只是手續費。修剪版：砍掉手續費最高 5% 小時。' : undefined} className={(c.left ? 'l ' : '') + (sort.key === c.key ? 'sorted' : '')} onClick={() => setSort(s => ({ key: c.key, dir: s.key === c.key ? (s.dir === 1 ? -1 : 1) : -1 }))}>{c.label}{sort.key === c.key ? (sort.dir === -1 ? ' ▼' : ' ▲') : ''}</th>)}</tr></thead>
       <tbody>{shown.map(r => <tr key={r.pool_id} className={r.excluded ? 'excluded' : ''}>
         {cols.map(c => {
           const v = c.get(r)
