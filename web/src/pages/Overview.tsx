@@ -10,7 +10,10 @@ type Col = { key: string; label: string; get: (r: Row) => number | string | null
 export default function Overview() {
   const [dates, setDates] = useState<string[]>([]); const [date, setDate] = useState<string>('')
   const [rows, setRows] = useState<Row[]>([]); const [D, setD] = useState('d1000'); const [R, setR] = useState('r25')
-  const [all, setAll] = useState(false); const [hookF, setHookF] = useState<'all' | 'none' | 'fee_only'>('all'); const [sort, setSort] = useState<{ key: string; dir: 1 | -1 }>({ key: 'score', dir: -1 })
+  const [all, setAll] = useState(false); const [hookF, setHookF] = useState<'all' | 'none' | 'fee_only'>('all');
+  const [wl, setWl] = useState<string[]>([]); const [wlOn, setWlOn] = useState(false); const [wlEdit, setWlEdit] = useState(false); const [wlText, setWlText] = useState('')
+  useEffect(() => { api<{ symbols: string[] }>('/api/watchlist').then(r => { setWl(r.symbols); setWlText(r.symbols.join(' ')) }).catch(() => {}) }, [])
+  const saveWl = async () => { const symbols = wlText.split(/[\s,]+/).filter(Boolean); const r = await api<{ symbols: string[] }>('/api/watchlist', { method: 'PUT', body: JSON.stringify({ symbols }) }); setWl(r.symbols); setWlText(r.symbols.join(' ')); setWlEdit(false) } const [sort, setSort] = useState<{ key: string; dir: 1 | -1 }>({ key: 'score', dir: -1 })
   const [err, setErr] = useState('')
   const width = useWidth(); const [layout, setLayout] = useState<'auto' | 'full' | 'compact'>('auto')
   const compact = layout === 'auto' ? width < 1900 : layout === 'compact'
@@ -38,12 +41,13 @@ export default function Overview() {
   const shown = useMemo(() => {
     const col = cols.find(c => c.key === sort.key)!
     const kindOf = (r: Row) => r.hook_kind ?? (r.hooks === ZERO_ADDR ? 'none' : 'liquidity')
-    return rows.filter(r => (all || !r.excluded) && (hookF === 'all' || kindOf(r) === hookF)).sort((a, b) => {
+    const wlSet = new Set(wl)
+    return rows.filter(r => (all || !r.excluded) && (hookF === 'all' || kindOf(r) === hookF) && (!wlOn || wlSet.has(r.symbol))).sort((a, b) => {
       const va = col.get(a), vb = col.get(b)
       if (va === null || va === undefined) return 1; if (vb === null || vb === undefined) return -1
       return (va < vb ? -1 : va > vb ? 1 : 0) * sort.dir
     })
-  }, [rows, all, hookF, sort, cols])
+  }, [rows, all, hookF, wlOn, wl, sort, cols])
   const cand = rows.filter(r => !r.excluded).length
   return <>
     <div className="toolbar">
@@ -52,6 +56,7 @@ export default function Overview() {
       <span><label>區間</label><Seg value={R} onChange={setR} options={[['r10', '±10%'], ['r25', '±25%'], ['rvol', 'vol']]} /></span>
       <span><label>顯示</label><Seg value={all ? 'all' : 'cand'} onChange={v => setAll(v === 'all')} options={[['cand', `候選 ${cand}`], ['all', `全部 ${rows.length}`]]} /></span>
       <span><label>Hook</label><Seg value={hookF} onChange={v => setHookF(v as any)} options={[['all', '全部'], ['none', '無 hook'], ['fee_only', '純費率 hook']]} /></span>
+      <span><label>名單</label><Seg value={wlOn ? 'wl' : 'all'} onChange={v => setWlOn(v === 'wl')} options={[['all', '全部股票'], ['wl', `觀察名單 ${wl.length}`]]} /> <button className="ghost" style={{ padding: '3px 8px' }} onClick={() => setWlEdit(e => !e)}>編輯</button></span>
       <span><label>版面</label><Seg value={layout} onChange={v => setLayout(v as any)} options={[['auto', '自動'], ['full', '完整'], ['compact', '精簡']]} /></span>
       {err && <span className="neg">{err}</span>}
     </div>
@@ -69,7 +74,12 @@ export default function Overview() {
         {!tight && <td className="num">{fmtPct(sm?.in_range_pct ?? null)}</td>}
         {!tight && <td className="num">{fmtNum(r.score, 3)}</td>}
       </tr> })}</tbody>
-    </table></div> : <div className="tablewrap">    <table className="grid">
+    </table></div> : <div className="tablewrap">    {wlEdit && <div className="card" style={{ marginBottom: 10 }}>
+      <div className="muted" style={{ fontSize: 13, marginBottom: 6 }}>觀察名單 = 你願意「往下出區間後抱著等它回來」的股票代碼，空白或逗號分隔。這只是篩選，不影響評分。</div>
+      <textarea style={{ width: '100%', minHeight: 60, fontFamily: 'var(--mono)' }} value={wlText} onChange={e => setWlText(e.target.value)} />
+      <div style={{ marginTop: 6, display: 'flex', gap: 8 }}><button className="primary" onClick={saveWl}>儲存</button><button className="ghost" onClick={() => setWlEdit(false)}>取消</button></div>
+    </div>}
+    <table className="grid">
       <thead><tr>{cols.map(c => <th key={c.key} className={(c.left ? 'l ' : '') + (sort.key === c.key ? 'sorted' : '')} onClick={() => setSort(s => ({ key: c.key, dir: s.key === c.key ? (s.dir === 1 ? -1 : 1) : -1 }))}>{c.label}{sort.key === c.key ? (sort.dir === -1 ? ' ▼' : ' ▲') : ''}</th>)}</tr></thead>
       <tbody>{shown.map(r => <tr key={r.pool_id} className={r.excluded ? 'excluded' : ''}>
         {cols.map(c => {

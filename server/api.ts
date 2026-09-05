@@ -4,6 +4,7 @@ import type Database from 'better-sqlite3'
 import { z } from 'zod'
 import { getDates, getOverview, getPool, listPositions, createPosition, closePosition, addJournal, exportPositions, positionKey } from './queries.js'
 import { loadScoring } from '../config/chain.js'
+import { getMeta, setMeta } from '../db/index.js'
 import { mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 const PositionSchema = z.object({ pool_id: z.string().min(3), label: z.string().min(1), range_lower: z.number().positive(), range_upper: z.number().positive(), deposit_usd: z.number().positive(), opened_at: z.string().min(10), notes: z.string().optional() })
@@ -50,6 +51,13 @@ export function registerApi(app: FastifyInstance, db: Database.Database) {
     const rel = req.params['*']; if (rel.includes('..')) return reply.code(400).send({ error: 'bad path' })
     const f = path.join(IMG_DIR, rel); if (!existsSync(f)) return reply.code(404).send({ error: 'not found' })
     const ext = path.extname(f).slice(1); reply.type(`image/${ext === 'jpg' ? 'jpeg' : ext}`); return readFileSync(f)
+  })
+  // 觀察名單：使用者願意「出區間後抱著等」的股票（D38）。存 meta，dashboard 可編輯
+  const DEFAULT_WATCHLIST = ['SPY', 'QQQ', 'VTI', 'GLD', 'SLV', 'AAPL', 'MSFT', 'NVDA', 'GOOGL', 'AMZN', 'META', 'UNH', 'XOM', 'JNJ', 'COST', 'LLY', 'AVGO', 'TSM', 'ORCL', 'NFLX', 'CSCO']
+  app.get('/api/watchlist', async () => { const v = getMeta(db, 'watchlist'); return { symbols: v ? JSON.parse(v) : DEFAULT_WATCHLIST, isDefault: !v } })
+  app.put('/api/watchlist', async (req, reply) => {
+    const p = z.object({ symbols: z.array(z.string().min(1).max(10)).max(200) }).safeParse(req.body); if (!p.success) return reply.code(400).send({ error: p.error.flatten() })
+    const symbols = [...new Set(p.data.symbols.map(s => s.trim().toUpperCase()).filter(Boolean))]; setMeta(db, 'watchlist', JSON.stringify(symbols)); return { symbols }
   })
   app.get('/api/scan-runs', async () => db.prepare('SELECT id, started_at, finished_at, ok, pools_scanned, api_calls, substr(error,1,200) error FROM scan_runs ORDER BY id DESC LIMIT 14').all())
 }
