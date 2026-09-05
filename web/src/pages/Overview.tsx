@@ -13,7 +13,8 @@ export default function Overview() {
   const [all, setAll] = useState(false); const [hookF, setHookF] = useState<'all' | 'none' | 'fee_only'>('all');
   const [wl, setWl] = useState<string[]>([]); const [wlOn, setWlOn] = useState(false); const [wlEdit, setWlEdit] = useState(false); const [wlText, setWlText] = useState('')
   useEffect(() => { api<{ symbols: string[] }>('/api/watchlist').then(r => { setWl(r.symbols); setWlText(r.symbols.join(' ')) }).catch(() => {}) }, [])
-  const saveWl = async () => { const symbols = wlText.split(/[\s,]+/).filter(Boolean); const r = await api<{ symbols: string[] }>('/api/watchlist', { method: 'PUT', body: JSON.stringify({ symbols }) }); setWl(r.symbols); setWlText(r.symbols.join(' ')); setWlEdit(false) } const [sort, setSort] = useState<{ key: string; dir: 1 | -1 }>({ key: 'score', dir: -1 })
+  const saveWl = async () => { const symbols = wlText.split(/[\s,]+/).filter(Boolean); const r = await api<{ symbols: string[] }>('/api/watchlist', { method: 'PUT', body: JSON.stringify({ symbols }) }); setWl(r.symbols); setWlText(r.symbols.join(' ')); setWlEdit(false) }
+  const [sort, setSort] = useState<{ key: string; dir: 1 | -1 }>({ key: 'score', dir: -1 })
   const [err, setErr] = useState('')
   const width = useWidth(); const [layout, setLayout] = useState<'auto' | 'full' | 'compact'>('auto')
   const compact = layout === 'auto' ? width < 1900 : layout === 'compact'
