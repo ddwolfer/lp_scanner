@@ -84,7 +84,7 @@ table.compact.tight td:last-child { min-width: 120px }
   main { padding: 10px 10px 40px }
   header.top { gap: 10px; padding: 0 10px }
   header.top .brand small { display: none }
-  header.top .right { display: none }
+  header.top .right { display: inline; font-size: 12px }
   .toolbar { gap: 8px 14px }
   table.grid th, table.grid td { padding-left: 5px; padding-right: 5px }
 }
