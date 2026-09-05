@@ -194,7 +194,7 @@ export function formatPositions(list: ReturnType<typeof listPositions>): string[
   const money = (v: number) => `${v >= 0 ? '+' : '−'}$${Math.abs(v).toFixed(2)}`
   return list.filter(p => !p.closed_at).map(p => {
     const days = p.actual ? Math.max(1, p.actual.days) : p.est ? Math.max(1, Math.round(p.est.hours / 24)) : 0
-    if (p.actual) return `${p.symbol}/USDG ${p.label}  實際 ${money(p.actual.net_usd)} / 模擬 ${p.est ? money(p.est.net_usd) : '—'} (${days}d)  在區間 ${p.actual.in_range ? '✓' : '✗'}`
+    if (p.actual) return `${p.symbol}/USDG ${p.label} (${days}d)  手續費 ${money(p.actual.fees_cum_usd)} + 價差 ${money(p.actual.value_usd - p.deposit_usd)} = ${money(p.actual.net_usd)}（模擬 ${p.est ? money(p.est.net_usd) : '—'}）  在區間 ${p.actual.in_range ? '✓' : '✗'}`
     if (!p.est) return `${p.symbol}/USDG ${p.label}  無小時資料`
     return `${p.symbol}/USDG ${p.label}  ${money(p.est.net_usd)} (${days}d, 估算)  在區間 ${p.est.in_range ? '✓' : '✗'}`
   })
