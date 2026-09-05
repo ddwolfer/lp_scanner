@@ -33,8 +33,8 @@ export default function Pool() {
         <dt>flags</dt><dd><FlagChips flags={latest?.flags ?? []} max={8} /></dd>
       </dl></div>
       <div className="card"><h2 style={{ margin: '0 0 6px' }}>模擬（$1000，{sim?.meta?.hours ?? 0} 小時）</h2>
-        {sim ? <table className="grid"><thead><tr><th className="l">區間</th><th>手續費</th><th>IL</th><th>淨損益</th><th>net APR</th><th>在區間</th><th>出區間</th></tr></thead><tbody>
-          {(['r10', 'r25', 'rvol'] as const).map(k => { const s = sim.d1000[k]; return <tr key={k}><td className="l">{k === 'rvol' ? `vol ±${(sim.meta.rvol_R * 100).toFixed(0)}%` : k === 'r10' ? '±10%' : '±25%'}</td><td className="num">{fmtUsd(s.fees_usd, 1)}</td><td className="num neg">{fmtUsd(s.il_usd, 1)}</td><td className={'num ' + (s.net_usd >= 0 ? 'pos' : 'neg')}>{fmtUsd(s.net_usd, 1)}</td><td className="num">{fmtPct(s.net_apr)}</td><td className="num">{fmtPct(s.in_range_pct)}</td><td className="num">{s.exits}</td></tr> })}
+        {sim ? <table className="grid"><thead><tr><th className="l">區間</th><th>手續費</th><th>修剪後</th><th>單時佔比</th><th>IL</th><th>淨損益（修剪）</th><th>net APR（修剪）</th><th>原始 APR</th><th>在區間</th><th>出區間</th></tr></thead><tbody>
+          {(['r10', 'r25', 'rvol'] as const).map(k => { const s = sim.d1000[k]; return <tr key={k}><td className="l">{k === 'rvol' ? `vol ±${(sim.meta.rvol_R * 100).toFixed(0)}%` : k === 'r10' ? '±10%' : '±25%'}</td><td className="num">{fmtUsd(s.fees_usd, 1)}</td><td className="num">{fmtUsd(s.fees_trimmed_usd, 1)}</td><td className={'num ' + ((s.top_hour_share ?? 0) > 0.5 ? 'neg' : (s.top_hour_share ?? 0) > 0.25 ? 'warn' : '')}>{fmtPct(s.top_hour_share)}</td><td className="num neg">{fmtUsd(s.il_usd, 1)}</td><td className={'num ' + ((s.net_trimmed_usd ?? s.net_usd) >= 0 ? 'pos' : 'neg')}>{fmtUsd(s.net_trimmed_usd ?? s.net_usd, 1)}</td><td className="num">{fmtPct(s.net_apr_trimmed ?? s.net_apr)}</td><td className="num muted">{fmtPct(s.net_apr)}</td><td className="num">{fmtPct(s.in_range_pct)}</td><td className="num">{s.exits}</td></tr> })}
         </tbody></table> : <span className="muted">未模擬（被硬排除或無資料）</span>}
       </div>
     </div>

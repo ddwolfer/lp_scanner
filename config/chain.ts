@@ -25,6 +25,7 @@ export const DYNAMIC_FEE_FLAG = 0x800000
 
 const ScoringSchema = z.object({
   sort_key: z.string(),
+  rank_field: z.enum(['net_apr', 'net_apr_trimmed']).default('net_apr_trimmed'),
   weights: z.object({
     net_apr: z.number(), in_range_pct: z.number(), vol7_cv: z.number(),
     trader_count: z.number(), price_dev: z.number(), all_day_tradable: z.number(),

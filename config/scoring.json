@@ -1,5 +1,6 @@
 {
   "sort_key": "d1000.r25",
+  "rank_field": "net_apr_trimmed",
   "weights": { "net_apr": 0.40, "in_range_pct": 0.20, "vol7_cv": 0.15, "trader_count": 0.10, "price_dev": 0.10, "all_day_tradable": 0.05 },
   "exclusions": {
     "fee_ppm_min": 1000, "fee_ppm_max": 60000, "min_age_days": 7, "min_tvl_usd": 5000,
