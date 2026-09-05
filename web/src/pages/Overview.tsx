@@ -33,7 +33,8 @@ export default function Overview() {
     { key: 'top1_share', label: 'top1', get: r => r.top1_share, fmt: v => fmtPct(v) },
     { key: 'price_dev_pct', label: '偏離', get: r => r.price_dev_pct, fmt: v => fmtPct(v, 1), cls: v => v !== null && Math.abs(v) > 0.03 ? 'warn' : '' },
     { key: 'raw_apr', label: '原始 APR', get: r => r.raw_apr, fmt: v => fmtPct(v) },
-    { key: 'net_apr', label: '模擬 net APR', get: r => simOf(r, D, R)?.net_apr ?? null, fmt: v => fmtPct(v), cls: v => v === null ? '' : v >= 0 ? 'pos' : 'neg' },
+    { key: 'net_apr', label: '模擬 net APR', get: r => simOf(r, D, R)?.net_apr_trimmed ?? simOf(r, D, R)?.net_apr ?? null, fmt: v => fmtPct(v), cls: v => v === null ? '' : v >= 0 ? 'pos' : 'neg' },
+    { key: 'top_hour', label: '單時佔比', get: r => simOf(r, D, R)?.top_hour_share ?? null, fmt: v => fmtPct(v), cls: v => v === null ? '' : v > 0.5 ? 'neg' : v > 0.25 ? 'warn' : '' },
     { key: 'in_range', label: '在區間', get: r => simOf(r, D, R)?.in_range_pct ?? null, fmt: v => fmtPct(v) },
     { key: 'net_usd', label: '淨損益', get: r => simOf(r, D, R)?.net_usd ?? null, fmt: v => fmtUsd(v, 1), cls: v => v === null ? '' : v >= 0 ? 'pos' : 'neg' },
     { key: 'score', label: 'score', get: r => r.score, fmt: v => fmtNum(v, 3) },
@@ -71,7 +72,7 @@ export default function Overview() {
         <td className="l"><Link to={`/pool/${r.pool_id}`}><PoolName symbol={r.symbol} fee_ppm={r.fee_ppm} fee_ppm_observed={r.fee_ppm_observed} hooks={r.hooks} hook_kind={r.hook_kind} hook_flags={r.hook_flags} protocol={r.protocol} /></Link>
           <span className="sub">TVL <b>{fmtUsd(r.tvl_usd)}</b> · 7日量 <b>{fmtUsd(r.vol7_avg_usd)}</b> · CV {fmtNum(r.vol7_cv, 2)} · 熱度 <b className={r.heat_6h === null ? '' : r.heat_6h >= 1 ? 'pos' : r.heat_6h < 0.5 ? 'neg' : ''}>{r.heat_6h === null ? '—' : r.heat_6h.toFixed(2) + '×'}</b> · 交易者 <b>{r.trader_count ?? '—'}</b> · top1 {fmtPct(r.top1_share)} · 偏離 <span className={r.price_dev_pct !== null && Math.abs(r.price_dev_pct) > 0.03 ? 'warn' : ''}>{fmtPct(r.price_dev_pct, 1)}</span> · 原始 {fmtPct(r.raw_apr)} <FlagChips flags={r.flags} max={3} /></span>
         </td>
-        <td className={'num ' + (sm ? (sm.net_apr >= 0 ? 'pos' : 'neg') : '')}>{fmtPct(sm?.net_apr ?? null)}<span className="sub">淨 {fmtUsd(sm?.net_usd ?? null, 1)}{tight && <> · 區間 <b>{fmtPct(sm?.in_range_pct ?? null)}</b> · <b>{fmtNum(r.score, 3)}</b></>}</span></td>
+        <td className={'num ' + (sm ? ((sm.net_apr_trimmed ?? sm.net_apr) >= 0 ? 'pos' : 'neg') : '')}>{fmtPct(sm?.net_apr_trimmed ?? sm?.net_apr ?? null)}<span className="sub">淨 {fmtUsd(sm?.net_trimmed_usd ?? sm?.net_usd ?? null, 1)}{sm && (sm.top_hour_share ?? 0) > 0.25 && <> · <span className={(sm.top_hour_share ?? 0) > 0.5 ? 'neg' : 'warn'}>單時 {fmtPct(sm.top_hour_share)}</span></>}{tight && <> · 區間 <b>{fmtPct(sm?.in_range_pct ?? null)}</b> · <b>{fmtNum(r.score, 3)}</b></>}</span></td>
         {!tight && <td className="num">{fmtPct(sm?.in_range_pct ?? null)}</td>}
         {!tight && <td className="num">{fmtNum(r.score, 3)}</td>}
       </tr> })}</tbody>

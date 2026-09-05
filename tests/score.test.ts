@@ -2,7 +2,7 @@ import { it, expect } from 'vitest'
 import { scorePools, getSimField } from '../scanner/metrics/score.js'
 import { loadScoring } from '../config/chain.js'
 const mk = (apr: number, inr: number) => ({ meta: { share_method: 'liquidity', hours: 24, sigma7: null, rvol_R: 0.25 },
-  d200: null as any, d5000: null as any, d1000: { r10: null as any, rvol: null as any, r25: { fees_usd: 0, value_end_usd: 0, il_usd: 0, net_usd: 0, net_pct: 0, net_apr: apr, in_range_hours: 0, in_range_pct: inr, exits: 0, hours: 24 } } })
+  d200: null as any, d5000: null as any, d1000: { r10: null as any, rvol: null as any, r25: { fees_usd: 0, value_end_usd: 0, il_usd: 0, net_usd: 0, net_pct: 0, net_apr: apr, net_apr_trimmed: apr, in_range_hours: 0, in_range_pct: inr, exits: 0, hours: 24 } } })
 it('getSimField 依 sort_key 取值', () => { expect(getSimField(mk(1.5, 0.9) as any, 'd1000.r25', 'net_apr')).toBe(1.5); expect(getSimField(null, 'd1000.r25', 'net_apr')).toBeNull() })
 it('分數落在 [0,1]，各項符合權重', () => {
   const s = loadScoring()

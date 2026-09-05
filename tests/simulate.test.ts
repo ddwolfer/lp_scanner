@@ -36,3 +36,12 @@ it('simulateAll 產生 9 組並在 sigma null 時標 rvol_fallback', () => {
   expect(sim.d1000.rvol).toEqual(sim.d1000.r25); expect(flags).toContain('rvol_fallback')
   expect(sim.d5000.r10.fees_usd).toBeGreaterThan(sim.d200.r10.fees_usd)
 })
+
+it('D39 修剪：單一小時暴利被砍掉，top_hour_share 反映集中度', () => {
+  const hours = H(Array(40).fill(100), 1, 1e18); hours[3] = { ...hours[3], feesUsd: 1000 }   // 一小時暴量
+  const r = simulate(hours, 1000, 0.25)
+  expect(r.trimmed_hours).toBe(2)
+  expect(r.top_hour_share).toBeGreaterThan(0.9)
+  expect(r.fees_trimmed_usd).toBeLessThan(r.fees_usd * 0.1)
+  expect(r.net_apr_trimmed).toBeLessThan(r.net_apr)
+})

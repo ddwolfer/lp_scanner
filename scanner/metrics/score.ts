@@ -11,8 +11,9 @@ export function getSimField(sim: SimJson | null, sortKey: string, field: keyof S
 export interface ScoreInput { poolId: string; sim: SimJson | null; vol7Cv: number; traderCount: number | null; priceDevPct: number | null; allDayTradable: boolean }
 /** rank_norm = 在未排除池中的百分位 rank/(n−1)（D20）；無參考價視為最差偏離（D21） */
 export function scorePools(rows: ScoreInput[], s: Scoring): Map<string, number> {
-  const withSim = rows.filter(r => getSimField(r.sim, s.sort_key, 'net_apr') !== null)
-  const sorted = [...withSim].sort((a, b) => getSimField(a.sim, s.sort_key, 'net_apr')! - getSimField(b.sim, s.sort_key, 'net_apr')!)
+  const rf = s.rank_field ?? 'net_apr_trimmed'
+  const withSim = rows.filter(r => getSimField(r.sim, s.sort_key, rf) !== null && getSimField(r.sim, s.sort_key, rf) !== undefined)
+  const sorted = [...withSim].sort((a, b) => getSimField(a.sim, s.sort_key, rf)! - getSimField(b.sim, s.sort_key, rf)!)
   const n = sorted.length; const rank = new Map(sorted.map((r, i) => [r.poolId, n > 1 ? i / (n - 1) : 1]))
   const w = s.weights; const out = new Map<string, number>()
   for (const r of withSim) {
