@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from 'react'
 const forcedW = Number(new URLSearchParams(window.location.search).get('w')) || 0
 function useWidth() { const [w, setW] = useState(() => forcedW || window.innerWidth); useEffect(() => { if (forcedW) return; const f = () => setW(window.innerWidth); window.addEventListener('resize', f); return () => window.removeEventListener('resize', f) }, []); return w }
 import { Link } from 'react-router-dom'
-import { api, fmtNum, fmtPct, fmtUsd, simOf, type Row } from '../api'
+import { api, fmtNum, fmtPct, fmtUsd, simOf, feeApr, type Row } from '../api'
 const ZERO_ADDR = '0x0000000000000000000000000000000000000000'
 import { FlagChips, PoolName, RankArrow, Seg } from '../components/bits'
 type Col = { key: string; label: string; get: (r: Row) => number | string | null; cls?: (v: any, r: Row) => string; fmt?: (v: any) => string; left?: boolean }
@@ -33,7 +33,8 @@ export default function Overview() {
     { key: 'top1_share', label: 'top1', get: r => r.top1_share, fmt: v => fmtPct(v) },
     { key: 'price_dev_pct', label: '偏離', get: r => r.price_dev_pct, fmt: v => fmtPct(v, 1), cls: v => v !== null && Math.abs(v) > 0.03 ? 'warn' : '' },
     { key: 'raw_apr', label: '原始 APR', get: r => r.raw_apr, fmt: v => fmtPct(v) },
-    { key: 'net_apr', label: '模擬 net APR ⓘ', get: r => simOf(r, D, R)?.net_apr_trimmed ?? simOf(r, D, R)?.net_apr ?? null, fmt: v => fmtPct(v), cls: v => v === null ? '' : v >= 0 ? 'pos' : 'neg' },
+    { key: 'fee_apr', label: '手續費 APR', get: r => feeApr(simOf(r, D, R), D), fmt: v => fmtPct(v), cls: v => v === null ? '' : 'pos' },
+    { key: 'net_apr', label: '含價差 net APR ⓘ', get: r => simOf(r, D, R)?.net_apr_trimmed ?? simOf(r, D, R)?.net_apr ?? null, fmt: v => fmtPct(v), cls: v => v === null ? '' : v >= 0 ? 'pos' : 'neg' },
     { key: 'top_hour', label: '單時佔比', get: r => simOf(r, D, R)?.top_hour_share ?? null, fmt: v => fmtPct(v), cls: v => v === null ? '' : v > 0.5 ? 'neg' : v > 0.25 ? 'warn' : '' },
     { key: 'in_range', label: '在區間', get: r => simOf(r, D, R)?.in_range_pct ?? null, fmt: v => fmtPct(v) },
     { key: 'net_usd', label: '淨損益', get: r => simOf(r, D, R)?.net_usd ?? null, fmt: v => fmtUsd(v, 1), cls: v => v === null ? '' : v >= 0 ? 'pos' : 'neg' },
@@ -64,7 +65,7 @@ export default function Overview() {
     </div>
     {compact ? <div className="tablewrap"><table className={'grid compact' + (tight ? ' tight' : '')}>
       <thead><tr>
-        {(tight ? ['rank_today', 'symbol', 'net_apr'] as const : ['rank_today', 'arrow', 'symbol', 'net_apr', 'in_range', 'score'] as const).map(k => { const c = cols.find(x => x.key === k)!; return <th key={k} className={(c.left ? 'l ' : '') + (sort.key === k ? 'sorted' : '')} onClick={() => setSort(s => ({ key: k, dir: s.key === k ? (s.dir === 1 ? -1 : 1) : -1 }))}>{tight && k === 'net_apr' ? 'net APR · 在區間 · score' : c.label}{sort.key === k ? (sort.dir === -1 ? ' ▼' : ' ▲') : ''}</th> })}
+        {(tight ? ['rank_today', 'symbol', 'net_apr'] as const : ['rank_today', 'arrow', 'symbol', 'net_apr', 'in_range', 'score'] as const).map(k => { const c = cols.find(x => x.key === k)!; return <th key={k} className={(c.left ? 'l ' : '') + (sort.key === k ? 'sorted' : '')} onClick={() => setSort(s => ({ key: k, dir: s.key === k ? (s.dir === 1 ? -1 : 1) : -1 }))}>{tight && k === 'net_apr' ? '手續費 APR · 含價差 · 在區間 · score' : k === 'net_apr' && !tight ? '手續費 APR / 含價差' : c.label}{sort.key === k ? (sort.dir === -1 ? ' ▼' : ' ▲') : ''}</th> })}
       </tr></thead>
       <tbody>{shown.map(r => { const sm = simOf(r, D, R); return <tr key={r.pool_id} className={r.excluded ? 'excluded' : ''}>
         <td className="num">{r.rank_today ?? '—'}{tight && <span className="sub"><RankArrow today={r.rank_today} prev={r.rank_prev} /></span>}</td>
@@ -72,7 +73,7 @@ export default function Overview() {
         <td className="l"><Link to={`/pool/${r.pool_id}`}><PoolName symbol={r.symbol} fee_ppm={r.fee_ppm} fee_ppm_observed={r.fee_ppm_observed} hooks={r.hooks} hook_kind={r.hook_kind} hook_flags={r.hook_flags} protocol={r.protocol} /></Link>
           <span className="sub">TVL <b>{fmtUsd(r.tvl_usd)}</b> · 7日量 <b>{fmtUsd(r.vol7_avg_usd)}</b> · CV {fmtNum(r.vol7_cv, 2)} · 熱度 <b className={r.heat_6h === null ? '' : r.heat_6h >= 1 ? 'pos' : r.heat_6h < 0.5 ? 'neg' : ''}>{r.heat_6h === null ? '—' : r.heat_6h.toFixed(2) + '×'}</b> · 交易者 <b>{r.trader_count ?? '—'}</b> · top1 {fmtPct(r.top1_share)} · 偏離 <span className={r.price_dev_pct !== null && Math.abs(r.price_dev_pct) > 0.03 ? 'warn' : ''}>{fmtPct(r.price_dev_pct, 1)}</span> · 原始 {fmtPct(r.raw_apr)} <FlagChips flags={r.flags} max={3} /></span>
         </td>
-        <td className={'num ' + (sm ? ((sm.net_apr_trimmed ?? sm.net_apr) >= 0 ? 'pos' : 'neg') : '')}>{fmtPct(sm?.net_apr_trimmed ?? sm?.net_apr ?? null)}<span className="sub">淨 {fmtUsd(sm?.net_trimmed_usd ?? sm?.net_usd ?? null, 1)}{sm && (sm.top_hour_share ?? 0) > 0.25 && <> · <span className={(sm.top_hour_share ?? 0) > 0.5 ? 'neg' : 'warn'}>單時 {fmtPct(sm.top_hour_share)}</span></>}{tight && <> · 區間 <b>{fmtPct(sm?.in_range_pct ?? null)}</b> · <b>{fmtNum(r.score, 3)}</b></>}</span></td>
+        <td className="num"><span className="pos">{fmtPct(feeApr(sm, D))}</span><span className="sub">含價差 <b className={sm ? ((sm.net_apr_trimmed ?? sm.net_apr) >= 0 ? 'pos' : 'neg') : ''}>{fmtPct(sm?.net_apr_trimmed ?? sm?.net_apr ?? null)}</b> · 淨 {fmtUsd(sm?.net_trimmed_usd ?? sm?.net_usd ?? null, 1)}{sm && (sm.top_hour_share ?? 0) > 0.25 && <> · <span className={(sm.top_hour_share ?? 0) > 0.5 ? 'neg' : 'warn'}>單時 {fmtPct(sm.top_hour_share)}</span></>}{tight && <> · 區間 <b>{fmtPct(sm?.in_range_pct ?? null)}</b> · <b>{fmtNum(r.score, 3)}</b></>}</span></td>
         {!tight && <td className="num">{fmtPct(sm?.in_range_pct ?? null)}</td>}
         {!tight && <td className="num">{fmtNum(r.score, 3)}</td>}
       </tr> })}</tbody>
@@ -82,7 +83,7 @@ export default function Overview() {
       <div style={{ marginTop: 6, display: 'flex', gap: 8 }}><button className="primary" onClick={saveWl}>儲存</button><button className="ghost" onClick={() => setWlEdit(false)}>取消</button></div>
     </div>}
     <table className="grid">
-      <thead><tr>{cols.map(c => <th key={c.key} title={c.key === 'net_apr' ? '手續費 + 期末市值 − 投入，再年化。含持有股票的漲跌與 IL，不只是手續費。修剪版：砍掉手續費最高 5% 小時。' : undefined} className={(c.left ? 'l ' : '') + (sort.key === c.key ? 'sorted' : '')} onClick={() => setSort(s => ({ key: c.key, dir: s.key === c.key ? (s.dir === 1 ? -1 : 1) : -1 }))}>{c.label}{sort.key === c.key ? (sort.dir === -1 ? ' ▼' : ' ▲') : ''}</th>)}</tr></thead>
+      <thead><tr>{cols.map(c => <th key={c.key} title={c.key === 'net_apr' ? '手續費 + 期末市值 − 投入，再年化。含持有股票的漲跌與 IL。修剪版：砍掉手續費最高 5% 小時。' : c.key === 'fee_apr' ? '只算修剪後的手續費 ÷ 投入，年化。這才是 LP 本身賺的。' : undefined} className={(c.left ? 'l ' : '') + (sort.key === c.key ? 'sorted' : '')} onClick={() => setSort(s => ({ key: c.key, dir: s.key === c.key ? (s.dir === 1 ? -1 : 1) : -1 }))}>{c.label}{sort.key === c.key ? (sort.dir === -1 ? ' ▼' : ' ▲') : ''}</th>)}</tr></thead>
       <tbody>{shown.map(r => <tr key={r.pool_id} className={r.excluded ? 'excluded' : ''}>
         {cols.map(c => {
           const v = c.get(r)

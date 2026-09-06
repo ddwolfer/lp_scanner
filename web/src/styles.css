@@ -74,7 +74,7 @@ form.pos-form label { display: flex; flex-direction: column; gap: 3px; font-size
 table.compact { table-layout: fixed; width: 100% }
 table.compact th:nth-child(1), table.compact td:nth-child(1) { width: 52px }
 table.compact th:nth-child(2), table.compact td:nth-child(2) { width: 64px }
-table.compact th:nth-child(4), table.compact td:nth-child(4) { width: 150px }
+table.compact th:nth-child(4), table.compact td:nth-child(4) { width: 190px }
 table.compact th:nth-child(5), table.compact td:nth-child(5) { width: 84px }
 table.compact th:nth-child(6), table.compact td:nth-child(6) { width: 80px }
 table.compact td { height: auto; padding: 5px 8px 6px; white-space: normal; vertical-align: top }
@@ -101,7 +101,7 @@ table.compact.tight td:last-child { min-width: 120px }
 table.compact.tight { table-layout: fixed; width: 100% }
 table.compact.tight th:nth-child(1), table.compact.tight td:nth-child(1) { width: 56px }
 table.compact.tight th:nth-child(2), table.compact.tight td:nth-child(2) { width: auto }
-table.compact.tight th:nth-child(3), table.compact.tight td:nth-child(3) { width: 170px; white-space: normal }
+table.compact.tight th:nth-child(3), table.compact.tight td:nth-child(3) { width: 190px; white-space: normal }
 table.compact.tight td.l { white-space: normal; overflow-wrap: anywhere }
 table.compact.tight td.l a { white-space: nowrap }
 table.compact.tight .sub { white-space: normal; overflow-wrap: anywhere; line-height: 1.55 }
