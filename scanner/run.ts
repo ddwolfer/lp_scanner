@@ -98,7 +98,7 @@ export async function runDaily(opts: { dbPath?: string; now?: Date; simOnly?: bo
       const refWide = !!quoteRaw && quoteRaw.spreadPct > scoring.scan.ref_max_spread_pct
       const quote = refWide ? { ...quoteRaw, mid: NaN } : quoteRaw
       const age = p.created_at ? ageDays(p.created_at, date) : null
-      const v7 = vol7([...recentVolumes(db, p.pool_id, date), volume])
+      const v7 = vol7(isUsWeekday(now) ? [...recentVolumes(db, p.pool_id, date), volume] : recentVolumes(db, p.pool_id, date))   // D41：週末當日不計入 CV
       const caRow = asset ? (nextCa.get(stockAddr, date) as { e: string | null })?.e : null
       const caDays = caRow ? ageDays(date, caRow) : null
       const effectiveFee: number | null = p.fee_ppm ?? feeObserved   // 動態費率池：觀察不到就 null → fee_out_of_range
@@ -125,7 +125,7 @@ export async function runDaily(opts: { dbPath?: string; now?: Date; simOnly?: bo
       const { sim, flags } = simulateAll(hours, weeklySigma(hours.map(h => h.priceUsd)))
       simById.set(r.pool_id, { sim, flags: [...JSON.parse(r.flags), ...flags, 'sigma_from_pool'] })   // DECISIONS 11.3
     }
-    const scores = scorePools(candRows.map(r => ({ poolId: r.pool_id, sim: simById.get(r.pool_id)!.sim, vol7Cv: r.vol7_cv ?? 0, traderCount: r.trader_count, priceDevPct: r.price_dev_pct, allDayTradable: r.all_day_tradable === 'tradable' })), scoring)
+    const scores = scorePools(candRows.map(r => ({ poolId: r.pool_id, sim: simById.get(r.pool_id)!.sim, vol7Cv: r.vol7_cv, traderCount: r.trader_count, priceDevPct: r.price_dev_pct, allDayTradable: r.all_day_tradable === 'tradable' })), scoring)
     for (const [id, v] of simById) updateSim(db, id, date, v.sim, scores.get(id) ?? null, v.flags)
     log(`simulated ${simById.size} candidate pools`)
     // 6. 刷量分析（SPEC §5/§8.1，P3）：只對評分前 N 名，命中門檻加 wash_suspect 後重新評分（DECISIONS D26）
@@ -160,7 +160,7 @@ export async function runDaily(opts: { dbPath?: string; now?: Date; simOnly?: bo
       }
       if (washExcluded) {   // 重新評分（被排除的不進百分位）
         const remain = candRows.filter(r => scores.has(r.pool_id))
-        const re = scorePools(remain.map(r => ({ poolId: r.pool_id, sim: simById.get(r.pool_id)!.sim, vol7Cv: r.vol7_cv ?? 0, traderCount: (db.prepare('SELECT trader_count t FROM pool_snapshots WHERE pool_id=? AND date=?').get(r.pool_id, date) as any)?.t ?? null, priceDevPct: r.price_dev_pct, allDayTradable: r.all_day_tradable === 'tradable' })), scoring)
+        const re = scorePools(remain.map(r => ({ poolId: r.pool_id, sim: simById.get(r.pool_id)!.sim, vol7Cv: r.vol7_cv, traderCount: (db.prepare('SELECT trader_count t FROM pool_snapshots WHERE pool_id=? AND date=?').get(r.pool_id, date) as any)?.t ?? null, priceDevPct: r.price_dev_pct, allDayTradable: r.all_day_tradable === 'tradable' })), scoring)
         for (const [id, sc] of re) db.prepare('UPDATE pool_snapshots SET score=? WHERE pool_id=? AND date=?').run(sc, id, date)
       }
       log(`wash analysis on ${topN.length} pools, ${washExcluded} flagged wash_suspect (traders via ${isAlchemy ? 'alchemy' : 'public rpc'})`)

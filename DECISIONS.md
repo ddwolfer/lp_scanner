@@ -260,6 +260,7 @@ LP 地址數: 9，同時也在交易的 LP: 4  ⚠️
 | D13 | 股票在哪一邊 | v4 依地址排序決定 currency0/1，實測最大的 SOFI/USDG 池 USDG 是 currency0（USDG `0x5fc5…` < SOFI `0x98e7…`）。`pools.stock_is_token0` 記錄；`price_usd` 一律為「股票 / USDG」，與 SPEC §6「token0 以 USD 計價」不同。 |
 | D14 | P1 摘要排序 | 尚無 §7 模擬，Top 5 依 `raw_apr = fees_24h × 365 / tvl` 排序，摘要內明示「原始 APR」。 |
 | D33 | 日誌截圖 | 前端把貼上/選取的圖轉 base64 送 `POST /api/positions/:id/journal`（body 上限 30 MB），server 存成 `data/positions/<tokenId>/<ts>-<n>.<ext>`，`journal.data.images` 記相對路徑，由 `/api/journal-image/*` 讀（擋 `..`）。整個 `data/positions/` 不進 git。 |
+| D41 | CV 只用平日 | 美股週末休市，鏈上量結構性掉七成；只有 2–4 個樣本又橫跨週末時，任何池的 `vol7_cv` 都會很高（AMZN 小側池 1.28）。修正：`recentVolumes` 只取 `is_weekday = 1` 的快照，週末當天不計入；樣本 < 3 時 `vol7_cv = NULL`（dashboard 顯示「—」，評分該項給中性 0.5）。 |
 | D40 | 參考價價差檢查 | Robinhood `/prices` 在週末仍更新，但價差可能離譜（2026-09-06 GLD bid 406.51 / ask 500，中間價 453 對交易所收盤 406.77 偏 +11%）。價差 > `scan.ref_max_spread_pct`（2%）時 `price_ref_usd = NULL`、`price_dev_pct = NULL`、`flags += ref_wide_spread`，不扣分不排除。另：SPCX 已在 Nasdaq 上市（ISIN US84615Q1031），先前「無真實市場錨定」的說法錯誤。 |
 | D39 | 修剪版 net APR | XOM 5% 池案例：資料第一小時池內流動性只有一個 $1,000 頭寸的大小，模擬份額 47%，一小時分到 $897，佔 74 小時總收益 78%。修正：每組模擬另算 `fees_trimmed_usd`（砍掉手續費最高 5% 小時、至少 1 小時）與 `net_apr_trimmed`，並記 `top_hour_share`（最高單一小時佔手續費比例）。評分與摘要改用 `rank_field = net_apr_trimmed`（`config/scoring.json` 可切回 `net_apr`）。Dashboard 顯示修剪後數字，單時佔比 > 25% 黃、> 50% 紅。 |
 | D38 | 觀察名單 | 使用者觀察：排名靠前的多是高波動股，往下出區間後「抱不回來」的風險評分沒有涵蓋。做法：不改評分，加使用者維護的觀察名單（存 `meta.watchlist`，dashboard 可編輯，預設為指數 ETF 與超大市值 21 檔），總覽可一鍵只看名單內的池。波動率欄位等 σ₇ 有值後補。 |

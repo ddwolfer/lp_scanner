@@ -43,7 +43,7 @@ export function writeHourly(db: Database.Database, poolId: string, rows: HourlyR
 export interface SnapshotRow {
   pool_id: string; date: string; is_weekday: number; tvl_usd: number | null; volume_24h_usd: number; fees_24h_usd: number
   price_usd: number | null; price_ref_usd: number | null; price_dev_pct: number | null; swap_count: number; fee_ppm_observed?: number | null; vol_6h_usd?: number | null; vol_1h_usd?: number | null
-  age_days: number | null; vol7_avg_usd: number; vol7_cv: number; raw_apr: number | null; flags: string[]; excluded: number
+  age_days: number | null; vol7_avg_usd: number; vol7_cv: number | null; raw_apr: number | null; flags: string[]; excluded: number
 }
 export function writeSnapshot(db: Database.Database, r: SnapshotRow) {
   db.prepare(`INSERT OR REPLACE INTO pool_snapshots(pool_id,date,is_weekday,tvl_usd,volume_24h_usd,fees_24h_usd,price_usd,price_ref_usd,price_dev_pct,swap_count,fee_ppm_observed,vol_6h_usd,vol_1h_usd,age_days,vol7_avg_usd,vol7_cv,raw_apr,flags,excluded)
@@ -55,8 +55,9 @@ export function previousCandidates(db: Database.Database, date: string): Set<str
   if (!prev?.d) return new Set()
   return new Set((db.prepare('SELECT pool_id FROM pool_snapshots WHERE date=? AND excluded=0').all(prev.d) as { pool_id: string }[]).map(r => r.pool_id))
 }
+/** 最近 n 個「平日」快照的成交量（D41：週末量結構性偏低，不計入 CV） */
 export function recentVolumes(db: Database.Database, poolId: string, beforeDate: string, n = 6): number[] {
-  return (db.prepare('SELECT volume_24h_usd v FROM pool_snapshots WHERE pool_id=? AND date<? ORDER BY date DESC LIMIT ?').all(poolId, beforeDate, n) as { v: number | null }[]).map(r => r.v ?? 0).reverse()
+  return (db.prepare('SELECT volume_24h_usd v FROM pool_snapshots WHERE pool_id=? AND date<? AND is_weekday=1 ORDER BY date DESC LIMIT ?').all(poolId, beforeDate, n) as { v: number | null }[]).map(r => r.v ?? 0).reverse()
 }
 export function pruneHourly(db: Database.Database, keepDays = 45) {
   db.prepare('DELETE FROM pool_hourly WHERE ts < ?').run(Math.floor(Date.now() / 1000) - keepDays * 86400)
