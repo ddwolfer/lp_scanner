@@ -65,6 +65,7 @@ pnpm test && pnpm typecheck      # 65 個單元測試（含 SPEC §7.4 三個模
 pnpm scan --sim-only             # 不重抓資料，只重跑模擬 / 評分 / 刷量 / 頭寸（改 config/scoring.json 後用）
 pnpm sim-check <poolId> [D=1000] [R=0.25] [from] [to]   # 逐小時模擬表格，供人工對照 Uniswap 介面
 pnpm positions                   # 立刻同步 TRACK_ADDRESS 的鏈上頭寸（v3 + v4），開完倉不用等隔天
+pnpm costs [天數] [--symbol X]    # 列出自己發起的交易：gas（USD）與 USDG/股票代幣流向，合計真實淨利
 pnpm probe-alchemy               # 測 Alchemy key 的 getLogs 範圍限制
 pnpm web:dev                     # 前端開發（Vite 5173，/api proxy 到 3000）
 ```
