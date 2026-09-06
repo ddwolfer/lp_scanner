@@ -17,7 +17,9 @@
     "web:dev": "vite --config web/vite.config.ts",
     "web:build": "vite build --config web/vite.config.ts",
     "positions": "tsx scripts/sync-positions.ts",
-    "costs": "tsx scripts/tx-costs.ts"
+    "costs": "tsx scripts/tx-costs.ts",
+    "pool": "tsx scripts/pool-check.ts",
+    "range": "tsx scripts/range-check.ts"
   },
   "dependencies": {
     "@fastify/static": "^10.1.3",

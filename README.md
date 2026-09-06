@@ -66,6 +66,8 @@ pnpm scan --sim-only             # 不重抓資料，只重跑模擬 / 評分 / 
 pnpm sim-check <poolId> [D=1000] [R=0.25] [from] [to]   # 逐小時模擬表格，供人工對照 Uniswap 介面
 pnpm positions                   # 立刻同步 TRACK_ADDRESS 的鏈上頭寸（v3 + v4），開完倉不用等隔天
 pnpm costs [天數] [--symbol X]    # 列出自己發起的交易：gas（USD）與 USDG/股票代幣流向，合計真實淨利
+pnpm pool <SYMBOL|poolId> [--live]  # 一檔股票所有池的體檢：費/TVL、熱度、hook、模擬、波動率、容量、回本
+pnpm range <poolId> <下限> <上限> [投入]  # 開倉前評自訂區間：歷史在區間比例、配比、模擬手續費、份額、容量
 pnpm probe-alchemy               # 測 Alchemy key 的 getLogs 範圍限制
 pnpm web:dev                     # 前端開發（Vite 5173，/api proxy 到 3000）
 ```
