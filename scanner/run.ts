@@ -93,7 +93,10 @@ export async function runDaily(opts: { dbPath?: string; now?: Date; simOnly?: bo
       if (hourly.length) writeHourly(db, p.pool_id, hourly)
       const volume = hourly.reduce((a, r) => a + r.volumeUsd, 0), fees = hourly.reduce((a, r) => a + r.feesUsd, 0), swaps = hourly.reduce((a, r) => a + r.swapCount, 0)
       const lastPrice = [...hourly].reverse().find(r => r.priceUsd !== null)?.priceUsd ?? null
-      const quote = asset ? quoteBySymbol.get(asset.tokenSymbol) ?? null : null
+      const quoteRaw = asset ? quoteBySymbol.get(asset.tokenSymbol) ?? null : null
+      // D40：Robinhood 週末/盤後報價價差可達 20%（GLD bid 406 / ask 500），價差 > 2% 的參考價不採用
+      const refWide = !!quoteRaw && quoteRaw.spreadPct > scoring.scan.ref_max_spread_pct
+      const quote = refWide ? { ...quoteRaw, mid: NaN } : quoteRaw
       const age = p.created_at ? ageDays(p.created_at, date) : null
       const v7 = vol7([...recentVolumes(db, p.pool_id, date), volume])
       const caRow = asset ? (nextCa.get(stockAddr, date) as { e: string | null })?.e : null
@@ -105,10 +108,11 @@ export async function runDaily(opts: { dbPath?: string; now?: Date; simOnly?: bo
       if (v7.shortHistory) flags.push('short_history')
       if (swapFetchFailed) flags.push('swap_fetch_failed')
       if (tvlStale) flags.push('tvl_stale')
+      if (refWide) flags.push('ref_wide_spread')
       writeSnapshot(db, { pool_id: p.pool_id, date, is_weekday: isUsWeekday(now) ? 1 : 0, tvl_usd: tvl, volume_24h_usd: volume, fees_24h_usd: fees, price_usd: lastPrice,
-        price_ref_usd: quote?.mid ?? null, price_dev_pct: lastPrice !== null ? priceDevPct(lastPrice, quote?.mid ?? null, Number(asset?.currentMultiplier ?? 1)) : null,
+        price_ref_usd: refWide ? null : quote?.mid ?? null, price_dev_pct: lastPrice !== null && !refWide ? priceDevPct(lastPrice, quote?.mid ?? null, Number(asset?.currentMultiplier ?? 1)) : null,
         swap_count: swaps, fee_ppm_observed: feeObserved, vol_6h_usd: hourly.slice(-6).reduce((a, r) => a + r.volumeUsd, 0), vol_1h_usd: hourly.slice(-1).reduce((a, r) => a + r.volumeUsd, 0), age_days: age, vol7_avg_usd: v7.avg, vol7_cv: v7.cv, raw_apr: tvl && tvl > 0 ? fees * 365 / tvl : null,
-        flags, excluded: flags.some(f => !['short_history', 'swap_fetch_failed', 'tvl_stale', 'hook_fee_only'].includes(f)) ? 1 : 0 })
+        flags, excluded: flags.some(f => !['short_history', 'swap_fetch_failed', 'tvl_stale', 'hook_fee_only', 'ref_wide_spread'].includes(f)) ? 1 : 0 })
       if (poolsScanned % 25 === 0) log(`pools ${poolsScanned}/${pools.length} (calls ${JSON.stringify(usage.toJSON())})`)
     }
     } else { poolsScanned = (db.prepare('SELECT COUNT(*) c FROM pool_snapshots WHERE date=?').get(date) as any).c; log(`sim-only: ${poolsScanned} snapshots for ${date}`) }

@@ -14,6 +14,8 @@ it('fetchPrice 算 mid，找不到回 null', async () => {
   const f = vi.fn().mockResolvedValueOnce(j({ quotes: [{ tokenSymbol: 'SOFI', bid: '17.9', ask: '17.91', isTradingHalt: false, generatedAt: 'x' }] }))
     .mockResolvedValueOnce({ ok: false, status: 404, json: async () => ({}) })
   expect(await fetchPrice({ usage: new ApiUsage(), fetchImpl: f }, 'SOFI')).toMatchObject({ mid: 17.905, isTradingHalt: false })
+  const g = vi.fn().mockResolvedValueOnce(j({ quotes: [{ tokenSymbol: 'GLD', bid: '406.51', ask: '500', isTradingHalt: false }] }))
+  expect((await fetchPrice({ usage: new ApiUsage(), fetchImpl: g }, 'GLD'))!.spreadPct).toBeGreaterThan(0.2)
   expect(await fetchPrice({ usage: new ApiUsage(), fetchImpl: f }, 'NOPE')).toBeNull()
 })
 it('fetchCorporateActions 把 processDate 轉成 YYYY-MM-DD', async () => {

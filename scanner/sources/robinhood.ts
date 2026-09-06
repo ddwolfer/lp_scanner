@@ -27,13 +27,14 @@ export async function fetchAssets(ctx: RhCtx): Promise<RhAsset[]> {
   }
   return out
 }
-export interface RhQuote { symbol: string; bid: number; ask: number; mid: number; isTradingHalt: boolean; generatedAt: string }
+export interface RhQuote { symbol: string; bid: number; ask: number; mid: number; spreadPct: number; isTradingHalt: boolean; generatedAt: string }
 export async function fetchPrice(ctx: RhCtx, symbol: string): Promise<RhQuote | null> {
   try {
     const body = await fetchJson<{ quotes: any[] }>(`${BASE}/prices/${encodeURIComponent(symbol)}`, { source: 'robinhood', usage: ctx.usage, fetchImpl: ctx.fetchImpl })
     const q = body.quotes?.[0]; if (!q) return null
     const bid = Number(q.bid), ask = Number(q.ask)
-    return { symbol: q.tokenSymbol, bid, ask, mid: (bid + ask) / 2, isTradingHalt: Boolean(q.isTradingHalt), generatedAt: String(q.generatedAt ?? '') }
+    const mid = (bid + ask) / 2
+    return { symbol: q.tokenSymbol, bid, ask, mid, spreadPct: mid > 0 ? (ask - bid) / mid : 0, isTradingHalt: Boolean(q.isTradingHalt), generatedAt: String(q.generatedAt ?? '') }
   } catch (e) { if (e instanceof HttpError && e.status === 404) return null; throw e }
 }
 export interface RhCorpAction { id: string; tokenSymbol: string; address: string; type: string; status: string; effectiveAt: string; raw: unknown }
