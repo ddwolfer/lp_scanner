@@ -26,3 +26,10 @@ export const HOOK_GROUPS: { zh: string; keys: string[]; note: string }[] = [
   { zh: '改帳類（可拿走金額）', keys: ['beforeSwapReturnsDelta', 'afterSwapReturnsDelta', 'afterAddLiquidityReturnsDelta', 'afterRemoveLiquidityReturnsDelta'], note: '有任一項即排除' },
 ]
 export const feeLabel = (fee_ppm: number | null, observed: number | null) => fee_ppm !== null ? (fee_ppm / 1e4).toFixed(2) + '%' : observed !== null ? '~' + (observed / 1e4).toFixed(2) + '%' : '動態'
+
+/** 手續費年化：只算修剪後手續費 ÷ 投入，不含股價漲跌與 IL */
+export const feeApr = (s: SimResult | null, D: string): number | null => {
+  if (!s || !s.hours) return null
+  const dep = Number(D.replace('d', '')); const fees = s.fees_trimmed_usd ?? s.fees_usd
+  return fees / dep * 365 / (s.hours / 24)
+}
