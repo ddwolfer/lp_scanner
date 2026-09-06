@@ -119,3 +119,7 @@ table.compact.tight td:last-child .sub { white-space: normal }
 .pnl td, .pnl th { white-space: normal; padding-left: 6px; padding-right: 6px }
 .pnl td.l { font-size: 15px }
 .pnl td.l small { display: block; color: var(--fg-3); font-size: 12px }
+
+.kv.help { grid-template-columns: max-content 1fr; gap: 6px 16px; font-size: 15px }
+.kv.help dt { color: var(--amber); font-family: var(--mono); white-space: nowrap }
+table.grid th[title] { cursor: help }

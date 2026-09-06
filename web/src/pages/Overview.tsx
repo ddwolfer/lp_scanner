@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from 'react'
 const forcedW = Number(new URLSearchParams(window.location.search).get('w')) || 0
 function useWidth() { const [w, setW] = useState(() => forcedW || window.innerWidth); useEffect(() => { if (forcedW) return; const f = () => setW(window.innerWidth); window.addEventListener('resize', f); return () => window.removeEventListener('resize', f) }, []); return w }
 import { Link } from 'react-router-dom'
-import { api, fmtNum, fmtPct, fmtUsd, simOf, feeApr, type Row } from '../api'
+import { api, fmtNum, fmtPct, fmtUsd, simOf, feeApr, COL_HELP, type Row } from '../api'
 const ZERO_ADDR = '0x0000000000000000000000000000000000000000'
 import { FlagChips, PoolName, RankArrow, Seg } from '../components/bits'
 type Col = { key: string; label: string; get: (r: Row) => number | string | null; cls?: (v: any, r: Row) => string; fmt?: (v: any) => string; left?: boolean }
@@ -11,6 +11,7 @@ export default function Overview() {
   const [dates, setDates] = useState<string[]>([]); const [date, setDate] = useState<string>('')
   const [rows, setRows] = useState<Row[]>([]); const [D, setD] = useState('d1000'); const [R, setR] = useState('r25')
   const [all, setAll] = useState(false); const [hookF, setHookF] = useState<'all' | 'none' | 'fee_only'>('all');
+  const [help, setHelp] = useState(false)
   const [wl, setWl] = useState<string[]>([]); const [wlOn, setWlOn] = useState(false); const [wlEdit, setWlEdit] = useState(false); const [wlText, setWlText] = useState('')
   useEffect(() => { api<{ symbols: string[] }>('/api/watchlist').then(r => { setWl(r.symbols); setWlText(r.symbols.join(' ')) }).catch(() => {}) }, [])
   const saveWl = async () => { const symbols = wlText.split(/[\s,]+/).filter(Boolean); const r = await api<{ symbols: string[] }>('/api/watchlist', { method: 'PUT', body: JSON.stringify({ symbols }) }); setWl(r.symbols); setWlText(r.symbols.join(' ')); setWlEdit(false) }
@@ -61,11 +62,13 @@ export default function Overview() {
       <span><label>Hook</label><Seg value={hookF} onChange={v => setHookF(v as any)} options={[['all', '全部'], ['none', '無 hook'], ['fee_only', '純費率 hook']]} /></span>
       <span><label>名單</label><Seg value={wlOn ? 'wl' : 'all'} onChange={v => setWlOn(v === 'wl')} options={[['all', '全部股票'], ['wl', `觀察名單 ${wl.length}`]]} /> <button className="ghost" style={{ padding: '3px 8px' }} onClick={() => setWlEdit(e => !e)}>編輯</button></span>
       <span><label>版面</label><Seg value={layout} onChange={v => setLayout(v as any)} options={[['auto', '自動'], ['full', '完整'], ['compact', '精簡']]} /></span>
+      <span><button className="ghost" style={{ padding: '3px 8px' }} onClick={() => setHelp(h => !h)}>{help ? '關閉說明' : '欄位說明 ?'}</button></span>
       {err && <span className="neg">{err}</span>}
     </div>
+    {help && <div className="card" style={{ marginBottom: 10 }}><div className="muted" style={{ fontSize: 13, marginBottom: 6 }}>滑鼠停在表頭上也會顯示同樣的說明。</div><dl className="kv help">{cols.map(c => <><dt key={c.key + 'k'}>{c.label.replace(' ⓘ', '')}</dt><dd key={c.key + 'v'} style={{ fontFamily: 'var(--sans)' }}>{COL_HELP[c.key]}</dd></>)}</dl></div>}
     {compact ? <div className="tablewrap"><table className={'grid compact' + (tight ? ' tight' : '')}>
       <thead><tr>
-        {(tight ? ['rank_today', 'symbol', 'net_apr'] as const : ['rank_today', 'arrow', 'symbol', 'net_apr', 'in_range', 'score'] as const).map(k => { const c = cols.find(x => x.key === k)!; return <th key={k} className={(c.left ? 'l ' : '') + (sort.key === k ? 'sorted' : '')} onClick={() => setSort(s => ({ key: k, dir: s.key === k ? (s.dir === 1 ? -1 : 1) : -1 }))}>{tight && k === 'net_apr' ? '手續費 APR · 含價差 · 在區間 · score' : k === 'net_apr' && !tight ? '手續費 APR / 含價差' : c.label}{sort.key === k ? (sort.dir === -1 ? ' ▼' : ' ▲') : ''}</th> })}
+        {(tight ? ['rank_today', 'symbol', 'net_apr'] as const : ['rank_today', 'arrow', 'symbol', 'net_apr', 'in_range', 'score'] as const).map(k => { const c = cols.find(x => x.key === k)!; return <th key={k} title={COL_HELP[k]} className={(c.left ? 'l ' : '') + (sort.key === k ? 'sorted' : '')} onClick={() => setSort(s => ({ key: k, dir: s.key === k ? (s.dir === 1 ? -1 : 1) : -1 }))}>{tight && k === 'net_apr' ? '手續費 APR · 含價差 · 在區間 · score' : k === 'net_apr' && !tight ? '手續費 APR / 含價差' : c.label}{sort.key === k ? (sort.dir === -1 ? ' ▼' : ' ▲') : ''}</th> })}
       </tr></thead>
       <tbody>{shown.map(r => { const sm = simOf(r, D, R); return <tr key={r.pool_id} className={r.excluded ? 'excluded' : ''}>
         <td className="num">{r.rank_today ?? '—'}{tight && <span className="sub"><RankArrow today={r.rank_today} prev={r.rank_prev} /></span>}</td>
@@ -83,7 +86,7 @@ export default function Overview() {
       <div style={{ marginTop: 6, display: 'flex', gap: 8 }}><button className="primary" onClick={saveWl}>儲存</button><button className="ghost" onClick={() => setWlEdit(false)}>取消</button></div>
     </div>}
     <table className="grid">
-      <thead><tr>{cols.map(c => <th key={c.key} title={c.key === 'net_apr' ? '手續費 + 期末市值 − 投入，再年化。含持有股票的漲跌與 IL。修剪版：砍掉手續費最高 5% 小時。' : c.key === 'fee_apr' ? '只算修剪後的手續費 ÷ 投入，年化。這才是 LP 本身賺的。' : undefined} className={(c.left ? 'l ' : '') + (sort.key === c.key ? 'sorted' : '')} onClick={() => setSort(s => ({ key: c.key, dir: s.key === c.key ? (s.dir === 1 ? -1 : 1) : -1 }))}>{c.label}{sort.key === c.key ? (sort.dir === -1 ? ' ▼' : ' ▲') : ''}</th>)}</tr></thead>
+      <thead><tr>{cols.map(c => <th key={c.key} title={COL_HELP[c.key]} className={(c.left ? 'l ' : '') + (sort.key === c.key ? 'sorted' : '')} onClick={() => setSort(s => ({ key: c.key, dir: s.key === c.key ? (s.dir === 1 ? -1 : 1) : -1 }))}>{c.label}{sort.key === c.key ? (sort.dir === -1 ? ' ▼' : ' ▲') : ''}</th>)}</tr></thead>
       <tbody>{shown.map(r => <tr key={r.pool_id} className={r.excluded ? 'excluded' : ''}>
         {cols.map(c => {
           const v = c.get(r)
