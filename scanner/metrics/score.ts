@@ -8,7 +8,7 @@ export function getSimField(sim: SimJson | null, sortKey: string, field: keyof S
   const set = sim[d] as any; const res: SimResult | undefined = set?.[r]
   return res ? res[field] : null
 }
-export interface ScoreInput { poolId: string; sim: SimJson | null; vol7Cv: number; traderCount: number | null; priceDevPct: number | null; allDayTradable: boolean }
+export interface ScoreInput { poolId: string; sim: SimJson | null; vol7Cv: number | null; traderCount: number | null; priceDevPct: number | null; allDayTradable: boolean }
 /** rank_norm = 在未排除池中的百分位 rank/(n−1)（D20）；無參考價視為最差偏離（D21） */
 export function scorePools(rows: ScoreInput[], s: Scoring): Map<string, number> {
   const rf = s.rank_field ?? 'net_apr_trimmed'
@@ -22,7 +22,7 @@ export function scorePools(rows: ScoreInput[], s: Scoring): Map<string, number> 
     out.set(r.poolId,
       w.net_apr * rank.get(r.poolId)! +
       w.in_range_pct * inRange +
-      w.vol7_cv * (1 - clamp(r.vol7Cv, 0, 2) / 2) +
+      w.vol7_cv * (r.vol7Cv === null ? 0.5 : 1 - clamp(r.vol7Cv, 0, 2) / 2) +   // 無 CV → 中性
       w.trader_count * clamp((r.traderCount ?? 0) / 50, 0, 1) +
       w.price_dev * (1 - clamp(dev, 0, 0.05) / 0.05) +
       w.all_day_tradable * (r.allDayTradable ? 1 : 0))

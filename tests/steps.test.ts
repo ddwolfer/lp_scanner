@@ -21,10 +21,10 @@ it('upsertPools 只收股票×USDG，記 stock_is_token0', () => {
   expect((db.prepare('SELECT stock_is_token0 s FROM pools WHERE pool_id=?').get('0x3') as any).s).toBe(0)
 })
 const snap = (pool_id: string, date: string, flags: string[], vol = 0) => ({ pool_id, date, is_weekday: 1, tvl_usd: 1, volume_24h_usd: vol, fees_24h_usd: 0, price_usd: null, price_ref_usd: null, price_dev_pct: null, swap_count: 0, age_days: 1, vol7_avg_usd: 0, vol7_cv: 0, raw_apr: 0, flags, excluded: flags.length ? 1 : 0 })
-it('previousCandidates 回前一日未排除池；recentVolumes 依日期升冪', () => {
+it('previousCandidates 回前一日未排除池；recentVolumes 只取平日、依日期升冪', () => {
   const db = openDb(':memory:')
   db.prepare(`INSERT INTO pools(pool_id,protocol) VALUES ('0x1','v4'),('0x2','v4')`).run()
-  writeSnapshot(db, snap('0x1', '2026-09-01', [], 10)); writeSnapshot(db, snap('0x1', '2026-09-02', [], 20)); writeSnapshot(db, snap('0x2', '2026-09-02', ['too_new']))
+  writeSnapshot(db, snap('0x1', '2026-09-01', [], 10)); writeSnapshot(db, snap('0x1', '2026-09-02', [], 20)); writeSnapshot(db, { ...snap('0x1', '2026-08-31', [], 999), is_weekday: 0 }); writeSnapshot(db, snap('0x2', '2026-09-02', ['too_new']))
   expect(previousCandidates(db, '2026-09-03')).toEqual(new Set(['0x1']))
   expect(recentVolumes(db, '0x1', '2026-09-03')).toEqual([10, 20])
 })
