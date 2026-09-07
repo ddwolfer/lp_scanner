@@ -6,6 +6,7 @@ export type Row = {
   trader_count: number | null; top1_share: number | null; price_usd: number | null; price_ref_usd: number | null; price_dev_pct: number | null
   raw_apr: number | null; score: number | null; excluded: number; flags: string[]; sim: SimJson | null; all_day_tradable: string | null
   vol_6h_usd: number | null; heat_6h: number | null
+  weekend_fees_usd: number | null; weekend_vol_usd: number | null; weekend_fee_tvl: number | null; weekend_hours: number
   rank_today: number | null; rank_prev: number | null
 }
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
@@ -52,6 +53,7 @@ export const COL_HELP: Record<string, string> = {
   top_hour: '單時佔比：模擬收益裡最高的單一小時佔手續費的比例。>25% 黃、>50% 紅，代表收益來自一次性事件。',
   in_range: '在區間：模擬期間價格待在區間內的小時比例。評分佔 20%。',
   net_usd: '淨損益：該投入金額的模擬淨損益（修剪後），美元。',
+  weekend: '週末費/TVL：最近一個週末（台灣週六 08:00 到週一 08:00）池子收到的手續費 ÷ TVL。週末沒有股價錨定、量少，這欄找「週末還有量」的池，給週五收盤後開窄區間的策略用。旁邊小字是週末成交量。',
   score: 'score：§8.3 加權總分（0–1）。net APR 百分位 40%、在區間 20%、CV 15%、交易者 10%、偏離 10%、24/5 可交易 5%。',
   flags: 'flags：排除原因或提示。紅色 = 硬排除；灰色 = 資訊性（例如 hook·費率、TVL 沿用前值）。',
 }

@@ -10,7 +10,7 @@ export default function Pool() {
   useEffect(() => { api<any>(`/api/pool/${id}`).then(setD).catch(e => setErr(String(e))) }, [id])
   if (err) return <p className="neg">{err}</p>
   if (!d) return <p className="muted">載入中…</p>
-  const { pool, snapshots, hourly, curves, corporateActions, latest, feeStats, economics } = d
+  const { pool, snapshots, hourly, curves, corporateActions, latest, feeStats, economics, weekend } = d
   const hookKind: string = pool.hook_kind ?? (pool.hooks === ZERO ? 'none' : 'liquidity'); const hookFlags: string[] = pool.hook_flags ?? []
   const sim = latest?.sim; const wash = latest?.wash_detail
   const pending = corporateActions.filter((c: any) => c.status.includes('IN_PROGRESS'))
@@ -51,6 +51,7 @@ export default function Pool() {
         <div><dl className="kv">
           <dt>最近 1h 成交速率 ÷ 全天</dt><dd className={economics.heat_1h === null ? '' : economics.heat_1h >= 1 ? 'pos' : economics.heat_1h < 0.5 ? 'neg' : ''}>{economics.heat_1h === null ? '—' : economics.heat_1h.toFixed(2) + '×'}</dd>
           <dt>最近 6h 成交速率 ÷ 全天</dt><dd className={economics.heat_6h === null ? '' : economics.heat_6h >= 1 ? 'pos' : economics.heat_6h < 0.5 ? 'neg' : ''}>{economics.heat_6h === null ? '—' : economics.heat_6h.toFixed(2) + '×'}</dd>
+          <dt>最近週末（六 08:00 到一 08:00）</dt><dd>{weekend ? <>手續費 {fmtUsd(weekend.fees, 0)} · 成交量 {fmtUsd(weekend.vol, 0)} · 費/TVL <b className={weekend.fee_tvl >= 0.005 ? 'pos' : ''}>{fmtPct(weekend.fee_tvl, 2)}</b> · {weekend.hours}h 資料</> : '—'}</dd>
           <dt>容量（佔 active liquidity {Math.round((economics.capacity?.share ?? 0.1) * 100)}%）</dt><dd>±10%：{fmtUsd(economics.capacity?.r10)} · ±25%：{fmtUsd(economics.capacity?.r25)}</dd>
         </dl><div className="muted" style={{ fontSize: 13, marginTop: 6 }}>熱度 &lt; 0.5× 表示昨天的量已經冷掉，24h 數字高估現在的收益。容量以上的投入會把自己的份額稀釋到不划算。</div></div>
         <div><table className="grid"><thead><tr><th className="l">投入</th><th>進場 swap</th><th>出場 swap</th><th>gas ×4</th><th>合計成本</th><th>每日手續費估</th><th>回本天數</th></tr></thead><tbody>
