@@ -260,6 +260,7 @@ LP 地址數: 9，同時也在交易的 LP: 4  ⚠️
 | D13 | 股票在哪一邊 | v4 依地址排序決定 currency0/1，實測最大的 SOFI/USDG 池 USDG 是 currency0（USDG `0x5fc5…` < SOFI `0x98e7…`）。`pools.stock_is_token0` 記錄；`price_usd` 一律為「股票 / USDG」，與 SPEC §6「token0 以 USD 計價」不同。 |
 | D14 | P1 摘要排序 | 尚無 §7 模擬，Top 5 依 `raw_apr = fees_24h × 365 / tvl` 排序，摘要內明示「原始 APR」。 |
 | D33 | 日誌截圖 | 前端把貼上/選取的圖轉 base64 送 `POST /api/positions/:id/journal`（body 上限 30 MB），server 存成 `data/positions/<tokenId>/<ts>-<n>.<ext>`，`journal.data.images` 記相對路徑，由 `/api/journal-image/*` 讀（擋 `..`）。整個 `data/positions/` 不進 git。 |
+| D46 | X 週掃 skill | 每週一手動觸發 `.claude/skills/x-weekly-scan`：用 Mac 的 Chrome 擴充套件搜 X 四組固定關鍵字（近一週、latest），抓取後只留實盤損益、事件、資金流向三類，提到的股票池用 `pnpm pool` 對照。不排程、不全自動：X 無對外 API，且判斷有無資訊需要人讀。定位是「去鏈上查證的線索」，不當開倉依據。首掃 2026-09-08：131 篇無新指標，外部實盤與 D16 too_new 排除一致。 |
 | D45 | 週末費/TVL | 給「週五收盤後開窄區間、週一 08:00 前關」的策略選池：最近一個週末（UTC 週六 00:00 起 48h）從 `pool_hourly` 加總手續費與成交量，除以最新 TVL。總覽多一欄可排序，單池頁列數字。SPCX 實驗：盤後 4 小時（台灣週六 04–08）佔週末收入四成，建議開倉時間台灣週六 04:00。 |
 | D44 | 出區間損失的手續費覆蓋天數 | `pnpm range` 加印：跌穿下緣 / 漲穿上緣時的帳面損失（相對投入），除以模擬每日手續費 = 需要幾天的費才蓋得掉。借自 CJ 的「賺一小時的費能扛脫離區間才能組」，換成股票代幣的時間軸（天）。 |
 | D43 | 分析腳本與 skills | 把反覆做過的臨時分析固定為 `pnpm pool`（一檔股票所有池的體檢，`--live` 上鏈算交易者 / LP / 費率分布）、`pnpm range`（自訂區間的歷史在區間比例、開倉配比、模擬手續費、份額、容量、回本）；判讀順序寫在 `.claude/skills/pool-check`，文章評估流程寫在 `.claude/skills/article-eval`。 |
