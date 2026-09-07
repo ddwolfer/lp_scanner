@@ -34,5 +34,10 @@ console.log(`\n【以現價開倉】需要 ${x.toFixed(4)} ${pool.symbol}（$${(
 console.log(`  跌到 ${Pl} 時全變 ${pool.symbol}：${positionAmounts(L, Pl, Pl, Pu).x.toFixed(4)} 顆（市值 $${positionValue(L, Pl, Pl, Pu).toFixed(2)}）；漲到 ${Pu} 時全變 USDG：$${positionValue(L, Pu, Pl, Pu).toFixed(2)}`)
 console.log(`\n【模擬手續費】用同一段歷史：合計 $${fees.toFixed(2)} → 每天 $${dailyFee.toFixed(2)}（${pct(dailyFee / D)}/日，年化 ${pct(dailyFee / D * 365)}）· 平均份額 ${shareN ? ((shareSum / shareN) * 100).toFixed(3) + '%' : '—'}`)
 console.log(`【成本】進出 swap + ${cfg.economics.lifecycle_txs} 筆 gas ≈ $${cost.totalUsd.toFixed(2)} → 回本 ${cost.breakevenDays ? cost.breakevenDays.toFixed(1) + ' 天' : '—'}`)
+// D44：出區間損失要幾天手續費才蓋得掉（CJ 的「賺一小時的費能扛脫離區間」換成天）
+const lossDown = D - positionValue(L, Pl, Pl, Pu), lossUp = D - positionValue(L, Pu, Pl, Pu)
+const cover = (loss: number) => loss <= 0 ? '不虧（出區間時市值 ≥ 投入）' : dailyFee > 0 ? `${(loss / dailyFee).toFixed(1)} 天` : '—（無手續費資料）'
+console.log(`【出區間損失 vs 手續費】跌穿 ${Pl}：帳面 ${lossDown >= 0 ? '−' : '+'}$${Math.abs(lossDown).toFixed(2)}（${pct(Math.abs(lossDown) / D)}）→ 需 ${cover(lossDown)} 的手續費蓋掉；漲穿 ${Pu}：${lossUp >= 0 ? '−' : '+'}$${Math.abs(lossUp).toFixed(2)} → ${cover(lossUp)}`)
+console.log(`  判讀：需要的天數若比你「預計價格待在區間的天數」長，這個區間不該開。`)
 console.log(`【容量】此區間投入超過 ${capacity ? '$' + Math.round(capacity).toLocaleString() : '—'} 就會佔到 active liquidity ${pct(cfg.economics.capacity_share)}，開始明顯稀釋自己`)
 db.close()
