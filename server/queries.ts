@@ -20,18 +20,32 @@ export interface OverviewRow {
   trader_count: number | null; top1_share: number | null; price_usd: number | null; price_ref_usd: number | null; price_dev_pct: number | null
   raw_apr: number | null; score: number | null; excluded: number; flags: string[]; sim: any; all_day_tradable: string | null
   vol_6h_usd: number | null; heat_6h: number | null
+  weekend_fees_usd: number | null; weekend_vol_usd: number | null; weekend_fee_tvl: number | null; weekend_hours: number
   rank_today: number | null; rank_prev: number | null
 }
 function rankMap(db: Database.Database, date: string): Map<string, number> {
   const rows = db.prepare('SELECT pool_id FROM pool_snapshots WHERE date=? AND excluded=0 AND score IS NOT NULL ORDER BY score DESC').all(date) as { pool_id: string }[]
   return new Map(rows.map((r, i) => [r.pool_id, i + 1]))
 }
+/** 最近一個週末（UTC 週六 00:00 起 48h = 台灣週六 08:00 到週一 08:00）的每池手續費與成交量（D45） */
+export function weekendWindow(now = new Date()): { from: number; to: number } {
+  const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()))
+  const back = (d.getUTCDay() + 1) % 7   // 距離上個週六的天數（週六 → 0）
+  const sat = d.getTime() / 1000 - back * 86400
+  return { from: sat, to: sat + 48 * 3600 }
+}
+export function weekendStats(db: Database.Database, now = new Date()): Map<string, { fees: number; vol: number; hours: number }> {
+  const { from, to } = weekendWindow(now)
+  const rows = db.prepare('SELECT pool_id, SUM(fees_usd) fees, SUM(volume_usd) vol, COUNT(*) hours FROM pool_hourly WHERE ts >= ? AND ts < ? GROUP BY pool_id').all(from, to) as any[]
+  return new Map(rows.map(r => [r.pool_id, { fees: r.fees ?? 0, vol: r.vol ?? 0, hours: r.hours }]))
+}
 export function getOverview(db: Database.Database, date: string): OverviewRow[] {
   const prevDate = (db.prepare('SELECT MAX(date) d FROM pool_snapshots WHERE date < ?').get(date) as { d: string | null }).d
   const today = rankMap(db, date); const prev = prevDate ? rankMap(db, prevDate) : new Map<string, number>()
+  const wk = weekendStats(db)
   const rows = db.prepare(`SELECT s.pool_id, t.symbol, p.protocol, p.fee_ppm, s.fee_ppm_observed, p.hooks, p.hook_kind, p.hook_flags, s.age_days, s.tvl_usd, s.volume_24h_usd, s.fees_24h_usd, s.vol7_avg_usd, s.vol7_cv,
       s.trader_count, s.top1_share, s.price_usd, s.price_ref_usd, s.price_dev_pct, s.raw_apr, s.score, s.excluded, s.flags, s.sim, t.all_day_tradable, s.vol_6h_usd ${POOL_JOIN} WHERE s.date=?`).all(date) as any[]
-  return rows.map(r => ({ ...r, heat_6h: r.vol_6h_usd !== null && r.volume_24h_usd > 0 ? (r.vol_6h_usd / 6) / (r.volume_24h_usd / 24) : null, flags: parse(r.flags) ?? [], hook_flags: parse(r.hook_flags) ?? [], sim: parse(r.sim), rank_today: today.get(r.pool_id) ?? null, rank_prev: prev.get(r.pool_id) ?? null }))
+  return rows.map(r => { const w = wk.get(r.pool_id); return ({ ...r, weekend_fees_usd: w ? w.fees : null, weekend_vol_usd: w ? w.vol : null, weekend_fee_tvl: w && r.tvl_usd ? w.fees / r.tvl_usd : null, weekend_hours: w?.hours ?? 0, heat_6h: r.vol_6h_usd !== null && r.volume_24h_usd > 0 ? (r.vol_6h_usd / 6) / (r.volume_24h_usd / 24) : null, flags: parse(r.flags) ?? [], hook_flags: parse(r.hook_flags) ?? [], sim: parse(r.sim), rank_today: today.get(r.pool_id) ?? null, rank_prev: prev.get(r.pool_id) ?? null }) })
 }
 export function getPool(db: Database.Database, poolId: string) {
   const pool = db.prepare(`SELECT p.*, t.symbol, t.name AS token_name, t.rh_status, t.all_day_tradable, t.current_multiplier, t.address AS stock_address FROM pools p
@@ -58,7 +72,8 @@ export function getPool(db: Database.Database, poolId: string) {
       return { D, cost: lifecycleCost(D, feeForCost, daily, econCfg.gas_usd_per_tx, econCfg.lifecycle_txs), dailyFeeUsd: daily } }),
     capacity: lastH ? { r10: capacityUsd(lastH.liquidity, lastH.price_usd, 0.10, econCfg.capacity_share), r25: capacityUsd(lastH.liquidity, lastH.price_usd, 0.25, econCfg.capacity_share), share: econCfg.capacity_share, activeLiquidity: lastH.liquidity } : null,
   }
-  return { pool: { ...pool, hook_flags: parse(pool.hook_flags) ?? [] }, snapshots, hourly, curves, corporateActions, latest, feeStats, economics }
+  const wkAll = weekendStats(db); const w = wkAll.get(poolId); const weekend = w ? { ...w, fee_tvl: latest?.tvl_usd ? w.fees / latest.tvl_usd : null, window: weekendWindow() } : null
+  return { pool: { ...pool, hook_flags: parse(pool.hook_flags) ?? [] }, snapshots, hourly, curves, corporateActions, latest, feeStats, economics, weekend }
 }
 export interface PositionInput { pool_id: string; label: string; range_lower: number; range_upper: number; deposit_usd: number; opened_at: string; notes?: string }
 export function createPosition(db: Database.Database, i: PositionInput): number {

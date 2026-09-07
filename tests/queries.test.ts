@@ -1,6 +1,6 @@
 import { it, expect } from 'vitest'
 import { openDb } from '../db/index.js'
-import { getDates, getOverview, getPool, createPosition, closePosition, listPositions, addJournal, listJournal, exportPositions } from '../server/queries.js'
+import { getDates, getOverview, getPool, createPosition, closePosition, listPositions, addJournal, listJournal, exportPositions, weekendWindow } from '../server/queries.js'
 import { readFileSync, rmSync } from 'node:fs'
 import { writeSnapshot, writeHourly, updateSim } from '../scanner/steps.js'
 function seed() {
@@ -47,4 +47,12 @@ it('日誌與 JSON 匯出', () => {
   const j = JSON.parse(readFileSync(files[0], 'utf8'))
   expect(j.label).toBe('j'); expect(j.journal).toHaveLength(1); expect(j.range_usd).toEqual([7.5, 12.5])
   rmSync(dir, { recursive: true, force: true })
+})
+
+it('weekendWindow：UTC 週六 00:00 起 48 小時', () => {
+  const w = weekendWindow(new Date('2026-09-07T01:45:00Z'))   // 週一
+  expect(new Date(w.from * 1000).toISOString()).toBe('2026-09-05T00:00:00.000Z')
+  expect((w.to - w.from) / 3600).toBe(48)
+  expect(new Date(weekendWindow(new Date('2026-09-05T10:00:00Z')).from * 1000).toISOString()).toBe('2026-09-05T00:00:00.000Z')   // 週六當天
+  expect(new Date(weekendWindow(new Date('2026-09-04T10:00:00Z')).from * 1000).toISOString()).toBe('2026-08-29T00:00:00.000Z')   // 週五 → 上週六
 })
