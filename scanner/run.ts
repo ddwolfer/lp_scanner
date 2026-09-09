@@ -51,12 +51,15 @@ export async function runDaily(opts: { dbPath?: string; now?: Date; simOnly?: bo
     const lastDisc = getMeta(db, 'last_discovery_block')
     const from = lastDisc ? BigInt(lastDisc) + 1n : latest - BigInt(30 * CHAIN.blocksPerDay)
     if (!lastDisc) log('尚未 backfill，只掃最近 30 天的 Initialize；請跑 pnpm backfill 補齊')
-    const found = [...await discoverUsdgPools(rpc, from, latest), ...await discoverV3UsdgPools(rpc, from, latest)]
-    const blockTs = new Map<string, string>()
-    for (const p of found) if (isStockUsdgPool(p, stockSet) && !blockTs.has(p.createdBlock.toString()))
-      blockTs.set(p.createdBlock.toString(), new Date(Number((await rpc.call(() => rpc.client.getBlock({ blockNumber: p.createdBlock }))).timestamp) * 1000).toISOString())
-    log(`discovery ${from}→${latest}: ${found.length} usdg pools (v3 ${found.filter(f => f.protocol === 'v3').length}), ${upsertPools(db, found, stockSet, blockTs)} new stock pools`)
-    setMeta(db, 'last_discovery_block', latest.toString())
+    // 發現失敗（RPC 429 持續超過重試上限）不中斷整天的掃描：cursor 不前進，明天補掃（D47）
+    try {
+      const found = [...await discoverUsdgPools(rpc, from, latest), ...await discoverV3UsdgPools(rpc, from, latest)]
+      const blockTs = new Map<string, string>()
+      for (const p of found) if (isStockUsdgPool(p, stockSet) && !blockTs.has(p.createdBlock.toString()))
+        blockTs.set(p.createdBlock.toString(), new Date(Number((await rpc.call(() => rpc.client.getBlock({ blockNumber: p.createdBlock }))).timestamp) * 1000).toISOString())
+      log(`discovery ${from}→${latest}: ${found.length} usdg pools (v3 ${found.filter(f => f.protocol === 'v3').length}), ${upsertPools(db, found, stockSet, blockTs)} new stock pools`)
+      setMeta(db, 'last_discovery_block', latest.toString())
+    } catch (e) { log(`discovery FAILED (${String((e as Error).message ?? e).slice(0, 80)}); continuing with known pools, cursor kept at ${from - 1n}`) }
     // 3. TVL（DexScreener）與參考價（Robinhood）
     { const n = backfillHookInfo(db); if (n) log(`hook info backfilled for ${n} pools`) }
     const pools = db.prepare('SELECT * FROM pools').all() as any[]
