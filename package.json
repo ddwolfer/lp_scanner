@@ -19,7 +19,8 @@
     "positions": "tsx scripts/sync-positions.ts",
     "costs": "tsx scripts/tx-costs.ts",
     "pool": "tsx scripts/pool-check.ts",
-    "range": "tsx scripts/range-check.ts"
+    "range": "tsx scripts/range-check.ts",
+    "spy-pairs": "tsx scripts/spy-pairs.ts"
   },
   "dependencies": {
     "@fastify/static": "^10.1.3",
