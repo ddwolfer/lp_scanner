@@ -32,8 +32,9 @@ export function makeRpc(o: { usage: ApiUsage; url?: string; concurrency?: number
     chain: { id: CHAIN.id, name: CHAIN.name, nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 }, rpcUrls: { default: { http: [url] } } },
     transport: http(url, { timeout: 60_000, retryCount: 0 }),
   })
-  const lim = new Limiter(o.concurrency ?? 2)
-  const minGapMs = o.minGapMs ?? 250; let lastStart = 0
+  // D47：公用 RPC 對 getLogs 的限流變嚴時，可用環境變數降速（RPC_CONCURRENCY、RPC_GAP_MS）
+  const lim = new Limiter(o.concurrency ?? Number(process.env.RPC_CONCURRENCY || 2))
+  const minGapMs = o.minGapMs ?? Number(process.env.RPC_GAP_MS || 250); let lastStart = 0
   async function call<T>(fn: () => Promise<T>): Promise<T> {
     return lim.run(async () => {
       for (let attempt = 0; ; attempt++) {
@@ -42,6 +43,8 @@ export function makeRpc(o: { usage: ApiUsage; url?: string; concurrency?: number
         try { return await fn() }
         catch (e) {
           const msg = String((e as Error).message ?? e)
+          if (process.env.RPC_DEBUG) console.error(`[rpc] attempt ${attempt} err: ${msg.split('\n')[0].slice(0, 120)}`)
+          if (isTooManyLogs(msg)) throw e   // D47：>10k logs 不是限流，立刻交給 getLogsChunked 對半切，不進退避
           // public RPC 對 getLogs 有突發限流（DECISIONS 11.5、D47）；最多 12 次退避，上限 60 秒（合計約 8 分鐘）
           if (attempt < 12 && /429|Too Many|compute units|exceeded|timeout|timed out|ECONNRESET|fetch failed|503|502/i.test(msg)) { await sleep(Math.min(60_000, 1000 * 2 ** attempt) + Math.random() * 500); continue }
           throw e
