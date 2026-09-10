@@ -12,7 +12,7 @@ import { parseAbi } from 'viem'
 
 export interface PoolInfo { poolId: string; token0: string; token1: string; feePpm: number; tickSpacing: number; d0: number; d1: number; inv: boolean; name: string; createdBlock: bigint | null }
 export interface Case { label: string; lower: number; upper: number }   // 顯示價
-export interface Row { label: string; Pl: number; Pu: number; inRange: number; exits: number; share: number; est: number; exact: number | null; adjusted: string; fee: number; il: number; net: number; retention: number; vs5050: number; hodlUsd: number }
+export interface Row { label: string; Pl: number; Pu: number; inRange: number; exits: number; share: number; shareP95: number; shareMax: number; exactDiluted: number | null; est: number; exact: number | null; adjusted: string; fee: number; il: number; net: number; retention: number; vs5050: number; hodlUsd: number }
 export interface WindowResult { name: string; from: bigint; to: bigint; t0: number; t1: number; hours: number; swaps: number; disp0: number; dispEnd: number; totalFeeUsd: number; sigmaHourly: number; rows: Row[] }
 
 const SV = parseAbi(['function getFeeGrowthInside(bytes32 poolId, int24 tickLower, int24 tickUpper) view returns (uint256, uint256)', 'function getTickLiquidity(bytes32 poolId, int24 tick) view returns (uint128 liquidityGross, int128 liquidityNet)', 'function getFeeGrowthGlobals(bytes32 poolId) view returns (uint256 feeGrowthGlobal0, uint256 feeGrowthGlobal1)'])
@@ -74,8 +74,9 @@ export async function replayWindow(ctx: Ctx, pool: PoolInfo, swAll: SwapLog[], f
     const [pa, pb] = [toP(c.lower), toP(c.upper)].sort((a, b) => a - b)
     let tl = Math.floor(tick(pa) / pool.tickSpacing) * pool.tickSpacing, tu = Math.ceil(tick(pb) / pool.tickSpacing) * pool.tickSpacing
     const Pl = priceAt(tl), Pu = priceAt(tu); const L = liquidityForDeposit(D, P0, Pl, Pu), Lraw = L * LSCALE; const { x: x0, y: y0 } = positionAmounts(L, P0, Pl, Pu)
-    let est = 0, inR = 0, exits = 0, prev = true, sh = 0
-    for (const h of hs) { const ir = h.p >= Pl && h.p <= Pu; if (ir) inR++; if (prev && !ir) exits++; prev = ir; const s = ir ? Lraw / (Number(h.l) + Lraw) : 0; sh += s; est += s * h.f }
+    let est = 0, inR = 0, exits = 0, prev = true, sh = 0; const shares: number[] = []
+    for (const h of hs) { const ir = h.p >= Pl && h.p <= Pu; if (ir) inR++; if (prev && !ir) exits++; prev = ir; const s = ir ? Lraw / (Number(h.l) + Lraw) : 0; if (ir) shares.push(s); sh += s; est += s * h.f }
+    shares.sort((a, b) => a - b); const shareP95 = shares[Math.floor(shares.length * 0.95)] ?? 0, shareMax = shares[shares.length - 1] ?? 0, shareMed = shares[Math.floor(shares.length / 2)] ?? 0
     let exact: number | null = null, adjusted = ''
     if (ctx.arpc && tickMin >= tl && tickMax < tu) {
       // 價格整段沒離開區間 → 所有手續費都發生在區間內，feeGrowthGlobal 的差就是 feeGrowthInside 的差，不依賴任何 tick（D55）
@@ -97,7 +98,7 @@ export async function replayWindow(ctx: Ctx, pool: PoolInfo, swAll: SwapLog[], f
     }
     const fee = exact ?? est; const lp = positionValue(L, Pend, Pl, Pu), hodl = x0 * Pend + y0; const il = lp - hodl, net = fee + il
     const half = (D / 2 / P0) * Pend + D / 2   // 50/50 組合：開倉時一半 Y、一半 X
-    rows.push({ label: c.label, Pl, Pu, inRange: inR / hs.length, exits, share: sh / hs.length, est: est * Y1, exact: exact === null ? null : exact * Y1, adjusted, fee: fee * Y1, il: il * Y1, net: net * Y1, retention: fee > 0 ? net / fee : 0, vs5050: (fee + lp - half) * Y1, hodlUsd: hodl * Y1 - D_USD })
+    rows.push({ label: c.label, Pl, Pu, inRange: inR / hs.length, exits, share: sh / hs.length, shareP95, shareMax, exactDiluted: exact === null ? null : exact * (1 - shareMed) * Y1, est: est * Y1, exact: exact === null ? null : exact * Y1, adjusted, fee: fee * Y1, il: il * Y1, net: net * Y1, retention: fee > 0 ? net / fee : 0, vs5050: (fee + lp - half) * Y1, hodlUsd: hodl * Y1 - D_USD })
   }
   const disp = (P: number) => pool.inv ? 1 / P : P
   return { name: pool.name, from, to, t0, t1, hours: hs.length, swaps: sw.length, disp0: disp(P0), dispEnd: disp(Pend), totalFeeUsd: hs.reduce((a, h) => a + h.f, 0) * Y1, sigmaHourly, rows }
@@ -114,28 +115,49 @@ export function hourlyRows(pool: PoolInfo, sw: SwapLog[], from: bigint, to: bigi
   return [...H.values()].sort((a, b) => a.ts - b.ts)
 }
 export type Policy = { kind: 'static' } | { kind: 'oor_hours'; hours: number } | { kind: 'beyond_pct'; pct: number } | { kind: 'weekly' }
-export interface StatefulResult { fees: number; costs: number; recenters: number; lpEnd: number; hodlEnd: number; net: number; inRange: number; hours: number }
+export interface Segment { tsFrom: number; tsTo: number; Pl: number; Pu: number; Lraw: number; exited: boolean; est: number }
+export interface StatefulResult { fees: number; costs: number; recenters: number; lpEnd: number; hodlEnd: number; net: number; inRange: number; hours: number; segments: Segment[]; shareMed: number; shareP95: number; shareMax: number }
 /** widthPct：區間半寬（顯示價 ±%）；costs：gasPerRecenterUsd（換成 Y 用 yUsd），swapFee = 池費率 + 滑價（比例，對重平衡的那一半） */
 export function simulateStateful(pool: PoolInfo, hs: HourRow[], widthPct: number, policy: Policy, D_USD: number, yUsd: (P: number) => number, gasUsd: number, swapCost: number): StatefulResult {
   const { liquidityForDeposit: lfd, positionAmounts: pa, positionValue: pv } = { liquidityForDeposit, positionAmounts, positionValue }
   const rangeAt = (P: number) => { const disp = pool.inv ? 1 / P : P; const a = pool.inv ? 1 / (disp * (1 + widthPct / 100)) : disp * (1 - widthPct / 100), b = pool.inv ? 1 / (disp * (1 - widthPct / 100)) : disp * (1 + widthPct / 100); return [Math.min(a, b), Math.max(a, b)] }
   const LSCALE = 10 ** ((pool.d0 + pool.d1) / 2); const P0 = hs[0].p; const D = D_USD / yUsd(P0)
   let [Pl, Pu] = rangeAt(P0); let L = lfd(D, P0, Pl, Pu); const { x: hx, y: hy } = pa(L, P0, Pl, Pu)   // HODL 基準 = 開倉當下的 token
-  let fees = 0, costs = 0, recenters = 0, inR = 0, oorSince: number | null = null, lastWeekly = hs[0].ts
+  let fees = 0, costs = 0, recenters = 0, inR = 0, oorSince: number | null = null, lastWeekly = hs[0].ts; const segments: Segment[] = []; const shares: number[] = []
+  let seg: Segment = { tsFrom: hs[0].ts, tsTo: hs[0].ts, Pl, Pu, Lraw: L * LSCALE, exited: false, est: 0 }
   const recenter = (P: number, ts: number) => {
     const val = pv(L, P, Pl, Pu); const { x, y } = pa(L, P, Pl, Pu); const [nl, nu] = rangeAt(P); const nL = lfd(val, P, nl, nu); const { x: nx } = pa(nL, P, nl, nu)
     const swapped = Math.abs(nx - x) * P   // 以 Y 計的換幣量（一邊多出來換成另一邊）
     const c = swapped * swapCost + gasUsd / yUsd(P); costs += c
     const val2 = val - c; L = lfd(val2, P, nl, nu); Pl = nl; Pu = nu; recenters++; oorSince = null; lastWeekly = ts
+    seg.tsTo = ts; segments.push(seg); seg = { tsFrom: ts, tsTo: ts, Pl, Pu, Lraw: L * LSCALE, exited: false, est: 0 }
   }
   for (let i = 0; i < hs.length; i++) {
     const h = hs[i]; const P = h.p; const ir = P >= Pl && P <= Pu
-    if (ir) { inR++; const Lraw = L * LSCALE; fees += Lraw / (Number(h.l) + Lraw) * h.f; oorSince = null } else if (oorSince === null) oorSince = h.ts
+    if (ir) { inR++; const Lraw = L * LSCALE; const sh = Lraw / (Number(h.l) + Lraw); shares.push(sh); fees += sh * h.f; seg.est += sh * h.f; oorSince = null } else { seg.exited = true; if (oorSince === null) oorSince = h.ts }
     if (i === hs.length - 1) break
     if (policy.kind === 'oor_hours' && oorSince !== null && h.ts - oorSince >= policy.hours * 3600) recenter(P, h.ts)
     else if (policy.kind === 'beyond_pct') { const disp = pool.inv ? 1 / P : P; const [dl, du] = pool.inv ? [1 / Pu, 1 / Pl] : [Pl, Pu]; if (disp < dl * (1 - policy.pct / 100) || disp > du * (1 + policy.pct / 100)) recenter(P, h.ts) }
     else if (policy.kind === 'weekly' && h.ts - lastWeekly >= 7 * 86400) recenter(P, h.ts)
   }
   const Pend = hs[hs.length - 1].p; const k = yUsd(Pend); const lpEnd = pv(L, Pend, Pl, Pu), hodlEnd = hx * Pend + hy
-  return { fees: fees * k, costs: costs * k, recenters, lpEnd: lpEnd * k, hodlEnd: hodlEnd * k, net: (fees - costs + lpEnd - hodlEnd) * k, inRange: inR / hs.length, hours: hs.length }
+  seg.tsTo = hs[hs.length - 1].ts; segments.push(seg); shares.sort((a, b) => a - b)
+  return { fees: fees * k, costs: costs * k, recenters, lpEnd: lpEnd * k, hodlEnd: hodlEnd * k, net: (fees - costs + lpEnd - hodlEnd) * k, inRange: inR / hs.length, hours: hs.length, segments, shareMed: shares[Math.floor(shares.length / 2)] ?? 0, shareP95: shares[Math.floor(shares.length * 0.95)] ?? 0, shareMax: shares[shares.length - 1] ?? 0 }
+}
+
+/** 每個段落的歷史 feeGrowth 費（Y 單位）；blockAt 把時間換成區塊。回傳 [合計（無效段用估計）, 有效段數, 段數] */
+export async function segmentsExactFee(ctx: Ctx, pool: PoolInfo, segs: Segment[], blockAt: (ts: number) => bigint): Promise<{ fee: number; valid: number; total: number }> {
+  if (!ctx.arpc) return { fee: segs.reduce((a, s) => a + s.est, 0), valid: 0, total: segs.length }
+  const M = 2n ** 256n; const dd = (x: bigint, y: bigint) => ((y - x) % M + M) % M; let fee = 0, valid = 0
+  const call = (fn: string, argsx: any[], b: bigint) => ctx.arpc!.call(() => ctx.arpc!.client.readContract({ address: ADDR.stateView, abi: SV, functionName: fn as any, args: [pool.poolId as `0x${string}`, ...argsx] as any, blockNumber: b })) as Promise<any>
+  for (const s of segs) {
+    const [bf, bt] = [blockAt(s.tsFrom), blockAt(s.tsTo)]; const tick = (P: number) => Math.log(P * 10 ** (pool.d1 - pool.d0)) / Math.log(1.0001)
+    const tl = Math.floor(tick(s.Pl) / pool.tickSpacing) * pool.tickSpacing, tu = Math.ceil(tick(s.Pu) / pool.tickSpacing) * pool.tickSpacing; const LB = BigInt(Math.round(s.Lraw))
+    let r: readonly [bigint, bigint][] | null = null
+    if (!s.exited) r = await Promise.all([call('getFeeGrowthGlobals', [], bf), call('getFeeGrowthGlobals', [], bt)])
+    else { const ok = (await Promise.all([[tl, bf], [tl, bt], [tu, bf], [tu, bt]].map(([t, b]) => call('getTickLiquidity', [t], b as bigint)))).every((x: any) => x[0] > 0n); if (ok) r = await Promise.all([call('getFeeGrowthInside', [tl, tu], bf), call('getFeeGrowthInside', [tl, tu], bt)]) }
+    if (r) { const fX = Number(LB * dd(r[0][0], r[1][0]) / 2n ** 128n) / 10 ** pool.d0, fY = Number(LB * dd(r[0][1], r[1][1]) / 2n ** 128n) / 10 ** pool.d1; const Pm = s.Pu; const v = fX * Math.sqrt(s.Pl * s.Pu) + fY; if (v > 0 && v < s.est * 5 + 1) { fee += v; valid++; continue } }
+    fee += s.est
+  }
+  return { fee, valid, total: segs.length }
 }

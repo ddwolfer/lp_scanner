@@ -28,23 +28,28 @@ for (const w of usable) {
 const medVol = [...stats.map(s => s.volW)].sort((a, b) => a - b)[Math.floor(stats.length / 2)]
 const regime = (s: typeof stats[number]) => Math.abs(s.ret) >= 0.01 ? (s.ret < 0 ? 'QQQ 跑贏' : 'SPY 跑贏') : s.volW >= medVol ? '高波動震盪' : '低波動震盪'
 
-const f = (v: number) => ('$' + v.toFixed(2)).padStart(8); const out: string[] = []; const agg = new Map<string, { n: number; net: number; fee: number; inR: number; vs: number }>()
+const f = (v: number) => ('$' + v.toFixed(2)).padStart(8); const out: string[] = []; const weekly = new Map<string, number[]>(); const agg = new Map<string, { n: number; net: number; fee: number; inR: number; vs: number }>()
 for (let i = 0; i < usable.length; i++) {
   const s = stats[i], w = s.w; const rg = regime(s)
   out.push(`\n== 窗口 ${i + 1}  ${new Date(tsAt(w.from) * 1000).toISOString().slice(0, 10)} → ${new Date(tsAt(w.to) * 1000).toISOString().slice(0, 10)}  區塊 ${w.from}–${w.to}  SPY/QQQ 週報酬 ${(s.ret * 100).toFixed(2)}%  週σ ${(s.volW * 100).toFixed(2)}%  → ${rg}`)
-  out.push('池 · 區間                       在區間 出去  feeGrowth費  估計費   LP−HODL     淨    留存率  LP−50/50  顯示價 起→終')
+  out.push('池 · 區間                       在區間 出去  feeGrowth費  估計費   LP−HODL     淨    留存率  LP−50/50  份額中位/最大  自身 regime  顯示價 起→終')
   for (let k = 0; k < pools.length; k++) {
     const p = pools[k]; if (p.pool.createdBlock && w.from < p.pool.createdBlock) continue
     const sig = sigmaPrev.get(p.pool.poolId)!; const usePrev = i > 0 && !Number.isNaN(sig[i - 1]); const sigma = usePrev ? sig[i - 1] : sig[i]; const star = usePrev ? '' : '*'
     const r0 = await replayWindow(ctx, p.pool, swaps.get(p.pool.poolId)!, w.from, w.to, tsAt(w.from), tsAt(w.to), [], D_USD, yUsdFor(p.pool)); const d0 = r0.disp0
     const cases: Case[] = [{ label: `政策 ±${p.policy}%`, lower: d0 * (1 - p.policy / 100), upper: d0 * (1 + p.policy / 100) }, ...[1, 1.5, 2].filter(m => m * sigma < 0.5).map(m => ({ label: `±${m}σ${star}(${(m * sigma * 100).toFixed(1)}%)`, lower: d0 * (1 - m * sigma), upper: d0 * (1 + m * sigma) }))]   // σ 超過 50% 的池（新池價格噪音）不做正規化
     const r = await replayWindow(ctx, p.pool, swaps.get(p.pool.poolId)!, w.from, w.to, tsAt(w.from), tsAt(w.to), cases, D_USD, yUsdFor(p.pool))
+    const ownRet = Math.log(r.dispEnd / r.disp0), ownVol = r.sigmaHourly * Math.sqrt(168); const own = Math.abs(ownRet) >= ownVol ? (ownRet > 0 ? '自身上漲趨勢' : '自身下跌趨勢') : '自身震盪'
     for (const row of r.rows) {
-      out.push(`${p.pool.name.padEnd(22)} ${row.label.padEnd(16)} ${(row.inRange * 100).toFixed(0).padStart(4)}%  ${String(row.exits).padStart(2)}   ${row.exact === null ? '  無效   ' : f(row.exact)}  ${f(row.est)}  ${f(row.il)}  ${f(row.net)}  ${(row.retention * 100).toFixed(0).padStart(4)}%  ${f(row.vs5050)}   ${r.disp0.toFixed(p.pool.inv ? 1 : 4)}→${r.dispEnd.toFixed(p.pool.inv ? 1 : 4)}${row.exact === null ? '（估）' : ''}`)
+      out.push(`${p.pool.name.padEnd(22)} ${row.label.padEnd(16)} ${(row.inRange * 100).toFixed(0).padStart(4)}%  ${String(row.exits).padStart(2)}   ${row.exact === null ? '  無效   ' : f(row.exact)}  ${f(row.est)}  ${f(row.il)}  ${f(row.net)}  ${(row.retention * 100).toFixed(0).padStart(4)}%  ${f(row.vs5050)}  ${(row.share * 100).toFixed(2)}%/${(row.shareMax * 100).toFixed(2)}%  ${own}  ${r.disp0.toFixed(p.pool.inv ? 1 : 4)}→${r.dispEnd.toFixed(p.pool.inv ? 1 : 4)}${row.exact === null ? '（估）' : row.adjusted === 'global' ? '（global）' : ''}`)
+      const wk = `${p.pool.name} | ${row.label.replace(/\*|\(.*\)/g, '')}`; weekly.set(wk, [...(weekly.get(wk) ?? []), row.net])
       const key = `${rg} | ${p.pool.name} | ${row.label.replace(/\*|\(.*\)/g, '')}`; const a = agg.get(key) ?? { n: 0, net: 0, fee: 0, inR: 0, vs: 0 }; a.n++; a.net += row.net; a.fee += row.fee; a.inR += row.inRange; a.vs += row.vs5050; agg.set(key, a)
     }
   }
 }
 out.push('\n== 依 regime 彙總（每窗口 $1000，平均）'); out.push('regime | 池 | 區間 | 窗口數 | 平均費 | 平均淨 | 留存率 | 平均在區間 | 平均 LP−50/50')
 for (const [k, a] of [...agg.entries()].sort()) out.push(`${k} | ${a.n} | ${f(a.fee / a.n)} | ${f(a.net / a.n)} | ${(a.fee ? a.net / a.fee * 100 : 0).toFixed(0)}% | ${(a.inR / a.n * 100).toFixed(0)}% | ${f(a.vs / a.n)}`)
+out.push('\n== 逐週穩健性（每窗口 $1000 淨，LP−HODL）'); out.push('池 | 區間 | 各週淨 | 合計 | 中位數 | 最差週 | 最好週佔比 | 留一法最低合計')
+for (const [k, v] of [...weekly.entries()].sort()) { const sum = v.reduce((a, b) => a + b, 0); const sorted = [...v].sort((a, b) => a - b); const best = Math.max(...v); const loo = Math.min(...v.map((_, i) => sum - v[i]))
+  out.push(`${k} | ${v.map(x => x.toFixed(2)).join(', ')} | ${sum.toFixed(2)} | ${sorted[Math.floor(v.length / 2)].toFixed(2)} | ${sorted[0].toFixed(2)} | ${sum > 0 ? (best / sum * 100).toFixed(0) + '%' : '—'} | ${loo.toFixed(2)}`) }
 console.log(out.join('\n')); console.error('api', ctx.usage.toJSON())
