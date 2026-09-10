@@ -21,7 +21,8 @@
     "pool": "tsx scripts/pool-check.ts",
     "range": "tsx scripts/range-check.ts",
     "spy-pairs": "tsx scripts/spy-pairs.ts",
-    "replay": "tsx scripts/lp-replay.ts"
+    "replay": "tsx scripts/lp-replay.ts",
+    "regimes": "tsx scripts/regime-backtest.ts"
   },
   "dependencies": {
     "@fastify/static": "^10.1.3",
