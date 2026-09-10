@@ -38,3 +38,11 @@ pnpm sim-check <poolId> [D] [R] [from] [to]
 - 頭寸卡片的「淨損益」含股價漲跌；只看 LP 賺的要看「手續費」那一行。
 - 週末（台灣週六 08:00 到週一 08:00）沒有股價錨定；Robinhood `/prices` 週末價差可能離譜（D40）。
 - 買賣股票代幣時 Uniswap 會自動路由，實收低於中價 0.3% 以上要換路徑。
+
+## 實盤驗收：AMD/USDG ±10% 靜態三週（2026-09 起，D56）
+每週固定一次，四個 KPI，全部唯讀：
+1. **實收費 vs feeGrowth 重放**：`pnpm positions` 取實收；`pnpm replay AMD --from=<mint block> --to=<latest> --lower=<下限> --upper=<上限>`，看「feeGrowth 費」欄，誤差目標 ±10%。
+2. **LP−HODL 累積**：同一列的「淨(LP−HODL)」，三週合計要是正的，不看 gross。
+3. **份額**：同一列「份額」；從 0.13% 掉到 0.05% 以下就重新評估，不拿八月的費水準當預期（池 TVL 五週漲 17 倍）。
+4. **留存率**：淨 ÷ 費。
+另記 TVL 與 24h 量（`pnpm pool AMD`）。期間不因單次出區間重開；三週後才決定是否放大到 $2–3k。
