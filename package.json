@@ -22,7 +22,8 @@
     "range": "tsx scripts/range-check.ts",
     "spy-pairs": "tsx scripts/spy-pairs.ts",
     "replay": "tsx scripts/lp-replay.ts",
-    "regimes": "tsx scripts/regime-backtest.ts"
+    "regimes": "tsx scripts/regime-backtest.ts",
+    "policies": "tsx scripts/policy-backtest.ts"
   },
   "dependencies": {
     "@fastify/static": "^10.1.3",
