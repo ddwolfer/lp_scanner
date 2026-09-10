@@ -26,9 +26,22 @@ const P = hours[hours.length - 1].priceUsd; const QQQ_USD = SPY_USD / P
 const totalFeeUsd = hours.reduce((a, r) => a + r.feesUsd, 0) * QQQ_USD, totalVol = hours.reduce((a, r) => a + r.vol, 0) * QQQ_USD
 const lo = Math.min(...hours.map(h => h.priceUsd)), hi = Math.max(...hours.map(h => h.priceUsd))
 console.log(`SPY/QQQ 0.05% · ${hours.length}h（${(hours.length / 24).toFixed(1)} 天）· 比值 ${lo.toFixed(4)} – ${hi.toFixed(4)}，現在 ${P.toFixed(4)} · 池總成交 $${Math.round(totalVol).toLocaleString()} · 池總手續費 $${Math.round(totalFeeUsd).toLocaleString()}（$${Math.round(totalFeeUsd / hours.length * 24)}/日）`)
-console.log('投入 $1000 ·  區間        在區間  出去  平均份額  手續費/日  淨值變化  IL     淨損益  折年')
-for (const [label, R] of [['±0.85%（GPT 現在）', 0.0085], ['±1.4%（GPT 推薦）', 0.014], ['±3.3%（GPT 低維護）', 0.033], ['±10%', 0.10]] as const) {
-  const D = 1000 / QQQ_USD; const r = simulate(hours, D, R); const k = QQQ_USD
-  const share = r.in_range_hours ? hours.reduce((a, h, i) => a, 0) : 0
-  console.log(`${label.padEnd(20)} ${(r.in_range_pct * 100).toFixed(0).padStart(4)}%   ${String(r.exits).padStart(2)}    ${'—'.padStart(6)}   $${(r.fees_usd * k / (hours.length / 24)).toFixed(2).padStart(5)}   $${((r.value_end_usd - D) * k).toFixed(2).padStart(6)}  $${(r.il_usd * k).toFixed(2).padStart(6)}  $${(r.net_usd * k).toFixed(2).padStart(6)}  ${(r.net_apr * 100).toFixed(0)}%`)
+import { liquidityForDeposit, positionAmounts, positionValue, L_HUMAN_TO_RAW } from '../scanner/metrics/lp-math.js'
+function replay(hs: SimHour[], D: number, Pl: number, Pu: number) {
+  const P0 = hs[0].priceUsd; const L = liquidityForDeposit(D, P0, Pl, Pu); const Lraw = L * L_HUMAN_TO_RAW; const { x: x0, y: y0 } = positionAmounts(L, P0, Pl, Pu)
+  let fees = 0, inR = 0, exits = 0, prevIn = true, shareSum = 0
+  for (const h of hs) { const inRange = h.priceUsd >= Pl && h.priceUsd <= Pu; if (inRange) inR++; if (prevIn && !inRange) exits++; prevIn = inRange
+    const share = inRange && h.liquidity ? Lraw / (Number(h.liquidity) + Lraw) : 0; shareSum += share; fees += share * h.feesUsd }
+  const Pend = hs[hs.length - 1].priceUsd; const lp = positionValue(L, Pend, Pl, Pu), hodl = x0 * Pend + y0
+  return { fees, lp, hodl, il: lp - hodl, net: fees + lp - hodl, inRange: inR / hs.length, exits, share: shareSum / hs.length, x0, y0 }
 }
+const k = QQQ_USD; const D = 1000 / k
+console.log(`窗口起點比值 ${hours[0].priceUsd.toFixed(4)} · 終點 ${P.toFixed(4)}（${((P / hours[0].priceUsd - 1) * 100).toFixed(2)}%）`)
+console.log('投入 $1000 · 區間                    開倉 SPY%  在區間 出去 平均份額 手續費  LP−HODL(不含費)  淨(LP−HODL)  費/日')
+const P0 = hours[0].priceUsd
+const cases: [string, number, number][] = [['截圖 1.0613–1.0795', 1.0613026, 1.0794981], ['±0.85% 對稱', P0 * 0.9915, P0 * 1.0085], ['±1.4%（1.055–1.085）', 1.055, 1.085], ['±3.3%（1.03–1.10）', 1.03, 1.10], ['±10%', P0 * 0.9, P0 * 1.1]]
+for (const [label, Pl, Pu] of cases) {
+  const r = replay(hours, D, Pl, Pu); const spyPct = r.x0 * P0 / (r.x0 * P0 + r.y0) * 100
+  console.log(`${label.padEnd(24)} ${spyPct.toFixed(0).padStart(4)}%     ${(r.inRange * 100).toFixed(0).padStart(3)}%  ${String(r.exits).padStart(2)}   ${(r.share * 100).toFixed(2).padStart(5)}%  $${(r.fees * k).toFixed(2).padStart(5)}   $${(r.il * k).toFixed(2).padStart(6)}        $${(r.net * k).toFixed(2).padStart(6)}   $${(r.fees * k / (hours.length / 24)).toFixed(2)}`)
+}
+console.log(`window_ts ${hours[0].ts} ${hours[hours.length - 1].ts}`)
