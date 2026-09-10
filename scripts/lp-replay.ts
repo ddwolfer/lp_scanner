@@ -1,5 +1,5 @@
 // scripts/lp-replay.ts — 用固定區塊窗口的真實 swap 重放一個 v4 池：$D 在各區間的手續費（小時估計 + 歷史 feeGrowth）、LP−HODL、淨、留存率（D50–D52）
-// 用法：pnpm replay <poolId | SYMBOL | SYM0/SYM1> [--days=5] [--d=1000] [--ranges=5,10,25] [--from=<block>] [--to=<block>] [--fee=0.05]
+// 用法：pnpm replay <poolId | SYMBOL | SYM0/SYM1> [--days=5] [--d=1000] [--ranges=5,10,25 | --lower=<顯示價> --upper=<顯示價>] [--from=<block>] [--to=<block>] [--fee=0.05]
 //   SYMBOL   → 該股票 TVL 最大的 USDG 候選池；SYM0/SYM1 → 兩個代幣的 v4 無 hook 池（--fee 選費率，預設 0.05）
 // 通用：X = token0、Y = token1、P = Y per X（人類單位）；D 以 Y 計（USD ÷ Y 的美元價）；L_raw = L_human × 10^((d0+d1)/2)
 import { openDb } from '../db/index.js'
@@ -41,7 +41,7 @@ const t0 = Number((await rpc.call(() => rpc.client.getBlock({ blockNumber: from 
 const interp = (b: bigint) => t0 + Number(b - from) * (t1 - t0) / Number(to - from)
 const sw = await fetchSwaps(rpc, pool.poolId, from, to)
 const H = new Map<number, { p: number; f: number; l: bigint }>()
-for (const s of sw) { const h = Math.floor(interp(s.blockNumber) / 3600); const P = (Number(s.sqrtPriceX96) / 2 ** 96) ** 2 * 10 ** (d0 - d1); const fY = Math.abs(Number(s.amount1)) / 10 ** d1 * s.fee / 1e6
+for (const s of sw) { const h = Math.floor(interp(s.blockNumber) / 3600); const P = (Number(s.sqrtPriceX96) / 2 ** 96) ** 2 * 10 ** (d0 - d1); const fY = (s.amount1 < 0n ? Number(-s.amount1) / 10 ** d1 : Number(-s.amount0) / 10 ** d0 * P) * s.fee / 1e6   // 輸入側 × 費率，換成 Y
   const r = H.get(h) ?? { p: P, f: 0, l: s.liquidity }; r.p = P; r.f += fY; r.l = s.liquidity; H.set(h, r) }
 const hs = [...H.values()]; const P0 = hs[0].p, Pend = hs[hs.length - 1].p; const totalFeeY = hs.reduce((a, h) => a + h.f, 0)
 const Y0 = yUsdAt(t0, P0), Y1 = yUsdAt(t1, Pend); const showP = (P: number) => pool.token0 === ADDR.usdg ? (1 / P).toFixed(2) : P.toFixed(4)
@@ -58,26 +58,33 @@ async function feeGrowthFee(tl: number, tu: number, Lraw: bigint): Promise<numbe
   // 邊界 tick 必須在窗口頭尾兩個區塊都有流動性：tick 在窗口內被清空或新建都會重設 feeGrowthOutside，差值就沒有意義（D52）。
   // 不合格就往外找最近的合格 tick（價格在兩個區間內時每單位 L 的 fee 相同），找不到回 null。
   const init = async (t: number) => { const [x, y] = await Promise.all([from, to].map(b => arpc!.call(() => arpc!.client.readContract({ address: ADDR.stateView, abi: SV, functionName: 'getTickLiquidity', args: [pool.poolId as `0x${string}`, t], blockNumber: b })))); return (x as any)[0] > 0n && (y as any)[0] > 0n }
+  // 外推只在價格整段都留在「原始」區間內才允許（GPT：否則外側區間會把原始頭寸出區間時的費也算進來）
+  if (tickMin < tl || tickMax >= tu) return null
   let l = tl, u = tu; for (let i = 0; i < 12 && !(await init(l)); i++) l -= pool.tickSpacing; for (let i = 0; i < 12 && !(await init(u)); i++) u += pool.tickSpacing
-  if (!(await init(l)) || !(await init(u)) || tickMin < l || tickMax >= u) return null
+  if (!(await init(l)) || !(await init(u))) return null
   if (l !== tl || u !== tu) adjusted = `（對照 tick ${l}/${u}）`
   tl = l; tu = u
   const [a, b] = await Promise.all([g(from), g(to)]); const M = 2n ** 256n; const dd = (x: bigint, y: bigint) => ((y - x) % M + M) % M
   const fX = Number(Lraw * dd(a[0], b[0]) / 2n ** 128n) / 10 ** d0, fY = Number(Lraw * dd(a[1], b[1]) / 2n ** 128n) / 10 ** d1
-  const feeY = fX * Pend + fY; return feeY > 0 && feeY <= totalFeeY ? feeY : null
+  const feeY = fX * Pend + fY; return feeY > 0 ? feeY : null   // 不再用估計的 totalFeeY 當守門（GPT）
 }
 
 // 4. 各區間
 const D = D_USD / Y0; const tick = (P: number) => Math.log(P * 10 ** (d1 - d0)) / Math.log(1.0001); const priceAt = (t: number) => 1.0001 ** t * 10 ** (d0 - d1)
+const inv = pool.token0 === ADDR.usdg; const toP = (disp: number) => inv ? 1 / disp : disp; const disp0 = inv ? 1 / P0 : P0   // 區間永遠在「顯示價」上定義（D53）
+const lowerArg = args.find(a => a.startsWith('--lower=')), upperArg = args.find(a => a.startsWith('--upper='))
+const cases: [string, number, number][] = lowerArg && upperArg ? [[`[${opt('lower', '')}–${opt('upper', '')}]`, Number(opt('lower', '')), Number(opt('upper', ''))]] : RANGES.map(R => [`±${String(R).padStart(2)}%`, disp0 * (1 - R / 100), disp0 * (1 + R / 100)])
+console.log(`token0 ${sym(pool.token0)}（${d0}）/ token1 ${sym(pool.token1)}（${d1}）· 顯示價 = ${inv ? '1/P' : 'P'} · 區間以顯示價定義`)
 console.log(`投入 $${D_USD} · 區間                     在區間 出去 份額    估計費   feeGrowth費  LP−HODL(不含費)  淨(LP−HODL)  留存率  費/日    HODL本身`)
-for (const R of RANGES) {
-  const tl = Math.floor(tick(P0 * (1 - R / 100)) / pool.tickSpacing) * pool.tickSpacing, tu = Math.ceil(tick(P0 * (1 + R / 100)) / pool.tickSpacing) * pool.tickSpacing
+for (const [label, dl, du] of cases) {
+  const [pa, pb] = [toP(dl), toP(du)].sort((a, b) => a - b)
+  const tl = Math.floor(tick(pa) / pool.tickSpacing) * pool.tickSpacing, tu = Math.ceil(tick(pb) / pool.tickSpacing) * pool.tickSpacing
   const Pl = priceAt(tl), Pu = priceAt(tu); const L = liquidityForDeposit(D, P0, Pl, Pu); const Lraw = L * LSCALE; const { x: x0, y: y0 } = positionAmounts(L, P0, Pl, Pu)
   let est = 0, inR = 0, exits = 0, prev = true, sh = 0
   for (const h of hs) { const ir = h.p >= Pl && h.p <= Pu; if (ir) inR++; if (prev && !ir) exits++; prev = ir; const s = ir ? Lraw / (Number(h.l) + Lraw) : 0; sh += s; est += s * h.f }
   const exact = await feeGrowthFee(tl, tu, BigInt(Math.round(Lraw))); const fee = exact ?? est
   const lp = positionValue(L, Pend, Pl, Pu), hodl = x0 * Pend + y0; const il = lp - hodl, net = fee + il; const k = Y1
   const f = (v: number) => ('$' + (v * k).toFixed(2)).padStart(8)
-  console.log(`  ±${String(R).padStart(2)}% [${[showP(Pl), showP(Pu)].sort((a, b) => Number(a) - Number(b)).join('–')}]`.padEnd(30) + `${(inR / hs.length * 100).toFixed(0).padStart(4)}%  ${String(exits).padStart(2)}  ${(sh / hs.length * 100).toFixed(2).padStart(5)}%  ${f(est)}  ${exact === null ? '   無效  ' : f(exact)}     ${f(il)}        ${f(net)}   ${(fee > 0 ? net / fee * 100 : 0).toFixed(0).padStart(4)}%  ${f(fee / ((t1 - t0) / 86400))}  ${('$' + (hodl * Y1 - D_USD).toFixed(2)).padStart(8)}${exact === null ? '   （feeGrowth 無效：找不到頭尾都初始化的邊界 tick，淨用估計費）' : adjusted}`)
+  console.log(`  ${label} [${[showP(Pl), showP(Pu)].sort((a, b) => Number(a) - Number(b)).join('–')}]`.padEnd(30) + `${(inR / hs.length * 100).toFixed(0).padStart(4)}%  ${String(exits).padStart(2)}  ${(sh / hs.length * 100).toFixed(2).padStart(5)}%  ${f(est)}  ${exact === null ? '   無效  ' : f(exact)}     ${f(il)}        ${f(net)}   ${(fee > 0 ? net / fee * 100 : 0).toFixed(0).padStart(4)}%  ${f(fee / ((t1 - t0) / 86400))}  ${('$' + (hodl * Y1 - D_USD).toFixed(2)).padStart(8)}${exact === null ? '   （feeGrowth 無效：價格曾離開區間或找不到頭尾都初始化的邊界 tick，淨用估計費）' : adjusted}`)
 }
 console.error('api', usage.toJSON())
