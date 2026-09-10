@@ -21,7 +21,6 @@
     "pool": "tsx scripts/pool-check.ts",
     "range": "tsx scripts/range-check.ts",
     "spy-pairs": "tsx scripts/spy-pairs.ts",
-    "spy-qqq": "tsx scripts/spy-qqq.ts",
     "replay": "tsx scripts/lp-replay.ts"
   },
   "dependencies": {
