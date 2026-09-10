@@ -46,3 +46,5 @@ pnpm sim-check <poolId> [D] [R] [from] [to]
 3. **份額**：同一列「份額」；從 0.13% 掉到 0.05% 以下就重新評估，不拿八月的費水準當預期（池 TVL 五週漲 17 倍）。
 4. **留存率**：淨 ÷ 費。
 另記 TVL 與 24h 量（`pnpm pool AMD`）。期間不因單次出區間重開；三週後才決定是否放大到 $2–3k。
+- 成本拆兩欄：**已發生**（`pnpm costs` 讀 receipt 的實際 gas + 開倉 swap）與**預估退出**（4 筆 gas + 換回 swap，約 $6），淨值先只扣已發生的，不要一開倉就把退出成本當已實現。
+- 開倉當下的 mint block、價格、實際 tick、AMD/USDG 數量、tx 都由 `pnpm positions` 從鏈上讀進 `positions.notes`（fetchMintInfo），replay 與 HODL 基準一律從 mint block 起算，不用日線近似價。
