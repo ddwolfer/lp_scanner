@@ -42,7 +42,8 @@ export function makeRpc(o: { usage: ApiUsage; url?: string; concurrency?: number
         o.usage.inc(source)
         try { return await fn() }
         catch (e) {
-          const msg = String((e as Error).message ?? e)
+          // viem 把 HTTP 狀態放在 details / cause，不在 message（9/11：message 只有「RPC Request failed.」，429 沒被重試，961 池抓不到 swap）
+          const ex = e as any; const msg = [ex?.message, ex?.details, ex?.shortMessage, ex?.cause?.message, ex?.status].filter(Boolean).join(' | ')
           if (process.env.RPC_DEBUG) console.error(`[rpc] attempt ${attempt} err: ${msg.split('\n')[0].slice(0, 120)}`)
           if (isTooManyLogs(msg)) throw e   // D47：>10k logs 不是限流，立刻交給 getLogsChunked 對半切，不進退避
           // public RPC 對 getLogs 有突發限流（DECISIONS 11.5、D47）；最多 12 次退避，上限 60 秒（合計約 8 分鐘）
