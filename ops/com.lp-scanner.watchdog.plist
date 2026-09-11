@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.lp-scanner.watchdog</string>
+  <key>ProgramArguments</key><array><string>/bin/zsh</string><string>-lc</string><string>cd /Users/pochenkuo/AI/lp_scanner &amp;&amp; pnpm -s watchdog >> logs/watchdog.log 2>&amp;1</string></array>
+  <key>StartCalendarInterval</key><array>
+    <dict><key>Hour</key><integer>10</integer><key>Minute</key><integer>30</integer></dict>
+    <dict><key>Hour</key><integer>13</integer><key>Minute</key><integer>30</integer></dict>
+  </array>
+  <key>RunAtLoad</key><false/>
+</dict></plist>

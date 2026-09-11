@@ -35,7 +35,7 @@ export async function runDaily(opts: { dbPath?: string; now?: Date; simOnly?: bo
   const now = opts.now ?? new Date(); const date = taipeiDate(now); const usage = new ApiUsage()
   const db = openDb(opts.dbPath ?? 'db/lp.sqlite'); const scoring = loadScoring()
   const runId = Number(db.prepare(`INSERT INTO scan_runs(started_at) VALUES (?)`).run(now.toISOString()).lastInsertRowid)
-  let poolsScanned = 0, swapPools = 0
+  let poolsScanned = 0, swapPools = 0, swapFailed = 0, discoveryFailed = false
   try {
     if (!opts.simOnly) {
     const rpc = makeRpc({ usage })
@@ -59,7 +59,7 @@ export async function runDaily(opts: { dbPath?: string; now?: Date; simOnly?: bo
         blockTs.set(p.createdBlock.toString(), new Date(Number((await rpc.call(() => rpc.client.getBlock({ blockNumber: p.createdBlock }))).timestamp) * 1000).toISOString())
       log(`discovery ${from}→${latest}: ${found.length} usdg pools (v3 ${found.filter(f => f.protocol === 'v3').length}), ${upsertPools(db, found, stockSet, blockTs)} new stock pools`)
       setMeta(db, 'last_discovery_block', latest.toString())
-    } catch (e) { log(`discovery FAILED (${String((e as Error).message ?? e).slice(0, 80)}); continuing with known pools, cursor kept at ${from - 1n}`) }
+    } catch (e) { discoveryFailed = true; log(`discovery FAILED (${String((e as Error).message ?? e).slice(0, 80)}); continuing with known pools, cursor kept at ${from - 1n}`) }
     // 3. TVL（DexScreener）與參考價（Robinhood）
     { const n = backfillHookInfo(db); if (n) log(`hook info backfilled for ${n} pools`) }
     const pools = db.prepare('SELECT * FROM pools').all() as any[]
@@ -91,7 +91,7 @@ export async function runDaily(opts: { dbPath?: string; now?: Date; simOnly?: bo
       let hourly: ReturnType<typeof aggregateHourly> = []; let swapFetchFailed = false; let feeObserved: number | null = null
       if (worth) {
         try { const sw = p.protocol === 'v3' ? await fetchV3Swaps(rpc, p.pool_id, p.fee_ppm, dayFrom, latest) : await fetchSwaps(rpc, p.pool_id, dayFrom, latest); hourly = aggregateHourly(sw, interp, !!p.stock_is_token0, tsFrom, tsTo); feeObserved = median(sw.map(x => x.fee)) }
-        catch (e) { swapFetchFailed = true; log(`swaps ${p.pool_id.slice(0, 10)}: ${String((e as Error).message).split('\n')[0]}`) }
+        catch (e) { swapFetchFailed = true; swapFailed++; log(`swaps ${p.pool_id.slice(0, 10)}: ${String((e as Error).message).split('\n')[0]}`) }
       }
       if (hourly.length) writeHourly(db, p.pool_id, hourly)
       const volume = hourly.reduce((a, r) => a + r.volumeUsd, 0), fees = hourly.reduce((a, r) => a + r.feesUsd, 0), swaps = hourly.reduce((a, r) => a + r.swapCount, 0)
@@ -182,14 +182,21 @@ export async function runDaily(opts: { dbPath?: string; now?: Date; simOnly?: bo
     const text = formatDailySummary({ date, weekdayZh: WEEKDAY_ZH[new Date(date + 'T00:00:00+08:00').getDay()], poolsScanned, candidates: cands.length, sortKey: scoring.sort_key,
       top: cands.slice(0, 5).map(r => { const sim = r.sim ? JSON.parse(r.sim) as SimJson : null
         return { label: label(r), feePct: r.fee_ppm !== null ? (r.fee_ppm / 1e4).toFixed(2) + '%' : r.fee_ppm_observed !== null ? '~' + (r.fee_ppm_observed / 1e4).toFixed(2) + '%' : '動態', netApr: getSimField(sim, scoring.sort_key, scoring.rank_field ?? 'net_apr_trimmed'), inRangePct: getSimField(sim, scoring.sort_key, 'in_range_pct'), traderCount: r.trader_count } }), changes, positions: formatPositions(listPositions(db)), dashboardUrl: process.env.DASHBOARD_URL })
-    console.log('\n' + text + '\n')
-    const sent = await sendTelegram(text, { token: process.env.TELEGRAM_BOT_TOKEN, chatId: process.env.TELEGRAM_CHAT_ID, topicId: process.env.TELEGRAM_TOPIC_ID })
+    // D58：資料完整性。swap 抓取失敗比例 > 20%、一個都沒抓、或發現階段失敗 → 摘要開頭標警告，scan_runs.degraded=1（watchdog 會再確認）
+    const failPct = swapPools ? swapFailed / swapPools : 0; const degraded = opts.simOnly ? null : (discoveryFailed || swapPools === 0 || failPct > 0.2)   // --sim-only 不抓 swap：狀態未知記 NULL，不覆蓋成正常（Codex review）
+    const warn = degraded ? `⚠️ 今日資料不完整：swap 抓取失敗 ${swapFailed}/${swapPools}（${(failPct * 100).toFixed(0)}%）${discoveryFailed ? '、池子發現失敗' : ''}。排名可能失真，建議補跑：cd ~/AI/lp_scanner && RPC_CONCURRENCY=2 RPC_GAP_MS=750 pnpm scan\n\n` : swapFailed ? `（swap 抓取失敗 ${swapFailed}/${swapPools}）\n` : ''
+    const fullText = warn + text
+    console.log('\n' + fullText + '\n')
+    const sent = await sendTelegram(fullText, { token: process.env.TELEGRAM_BOT_TOKEN, chatId: process.env.TELEGRAM_CHAT_ID, topicId: process.env.TELEGRAM_TOPIC_ID })
     pruneHourly(db)
-    db.prepare(`UPDATE scan_runs SET finished_at=?, ok=1, pools_scanned=?, api_calls=?, error=? WHERE id=?`)
-      .run(new Date().toISOString(), poolsScanned, JSON.stringify(usage.toJSON()), sent === 'not_configured' ? 'telegram_not_configured' : null, runId)
+    db.prepare(`UPDATE scan_runs SET finished_at=?, ok=1, pools_scanned=?, api_calls=?, error=?, degraded=?, alert_sent=? WHERE id=?`)
+      .run(new Date().toISOString(), poolsScanned, JSON.stringify(usage.toJSON()), sent === 'not_configured' ? 'telegram_not_configured' : null, degraded === null ? null : degraded ? 1 : 0, degraded ? (sent === 'sent' ? 1 : 0) : null, runId)
     log(`done. swap-fetched pools=${swapPools}. telegram=${sent} api_calls=${JSON.stringify(usage.toJSON())}`)
   } catch (e) {
-    db.prepare(`UPDATE scan_runs SET finished_at=?, ok=0, pools_scanned=?, api_calls=?, error=? WHERE id=?`).run(new Date().toISOString(), poolsScanned, JSON.stringify(usage.toJSON()), String((e as Error).stack ?? e), runId)
+    // D58：失敗先通知再 rethrow；通知失敗不影響 rethrow，alert_sent 記錄結果讓 watchdog 補送
+    let alertSent = 0
+    try { const r = await sendTelegram(`❌ 掃描失敗 ${date}\n${String((e as Error).message ?? e).split('\n')[0].slice(0, 200)}\n已掃 ${poolsScanned} 池。補跑：cd ~/AI/lp_scanner && RPC_CONCURRENCY=2 RPC_GAP_MS=750 pnpm scan`, { token: process.env.TELEGRAM_BOT_TOKEN, chatId: process.env.TELEGRAM_CHAT_ID, topicId: process.env.TELEGRAM_TOPIC_ID }); alertSent = r === 'sent' ? 1 : 0 } catch { alertSent = 0 }
+    db.prepare(`UPDATE scan_runs SET finished_at=?, ok=0, pools_scanned=?, api_calls=?, error=?, alert_sent=? WHERE id=?`).run(new Date().toISOString(), poolsScanned, JSON.stringify(usage.toJSON()), String((e as Error).stack ?? e), alertSent, runId)
     throw e
   } finally { db.close() }
 }

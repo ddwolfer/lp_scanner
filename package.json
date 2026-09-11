@@ -23,7 +23,8 @@
     "spy-pairs": "tsx scripts/spy-pairs.ts",
     "replay": "tsx scripts/lp-replay.ts",
     "regimes": "tsx scripts/regime-backtest.ts",
-    "policies": "tsx scripts/policy-backtest.ts"
+    "policies": "tsx scripts/policy-backtest.ts",
+    "watchdog": "tsx scripts/watchdog.ts"
   },
   "dependencies": {
     "@fastify/static": "^10.1.3",

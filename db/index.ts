@@ -25,5 +25,8 @@ function migrate(db: Database.Database) {
   const pcols = new Set((db.prepare('PRAGMA table_info(pools)').all() as { name: string }[]).map(c => c.name))
   if (!pcols.has('hook_kind')) db.exec('ALTER TABLE pools ADD COLUMN hook_kind TEXT')
   if (!pcols.has('hook_flags')) db.exec('ALTER TABLE pools ADD COLUMN hook_flags TEXT')
+  const rcols = new Set((db.prepare('PRAGMA table_info(scan_runs)').all() as { name: string }[]).map(c => c.name))
+  if (!rcols.has('degraded')) db.exec('ALTER TABLE scan_runs ADD COLUMN degraded INTEGER')          // D58：資料不完整（swap 失敗比例高 / 發現失敗）
+  if (!rcols.has('alert_sent')) db.exec('ALTER TABLE scan_runs ADD COLUMN alert_sent INTEGER')      // D58：失敗 / 降級通知是否送達
   // position_journal 由 schema.sql 的 CREATE TABLE IF NOT EXISTS 建立
 }
