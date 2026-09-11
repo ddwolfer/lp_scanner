@@ -18,7 +18,9 @@ export class Limiter {
   }
 }
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
-export const isTooManyLogs = (e: unknown) => /exceeds limit|Missing or invalid parameters|query returned more than|response size/i.test(String((e as Error)?.message ?? e))
+/** viem 錯誤的可比對字串：message 之外還有 details / shortMessage / cause（429、exceeds limit 都在 details）；非物件就 String(e)（Codex review D57） */
+export const errText = (e: unknown) => { const ex = e as any; const parts = ex && typeof ex === 'object' ? [ex.message, ex.details, ex.shortMessage, ex.cause?.message, ex.status] : []; const s = parts.filter(Boolean).join(' | '); return s || String(e) }
+export const isTooManyLogs = (e: unknown) => /exceeds limit|Missing or invalid parameters|query returned more than|response size/i.test(errText(e))
 export interface Rpc {
   client: PublicClient
   call<T>(fn: () => Promise<T>): Promise<T>
@@ -43,7 +45,7 @@ export function makeRpc(o: { usage: ApiUsage; url?: string; concurrency?: number
         try { return await fn() }
         catch (e) {
           // viem 把 HTTP 狀態放在 details / cause，不在 message（9/11：message 只有「RPC Request failed.」，429 沒被重試，961 池抓不到 swap）
-          const ex = e as any; const msg = [ex?.message, ex?.details, ex?.shortMessage, ex?.cause?.message, ex?.status].filter(Boolean).join(' | ')
+          const msg = errText(e)
           if (process.env.RPC_DEBUG) console.error(`[rpc] attempt ${attempt} err: ${msg.split('\n')[0].slice(0, 120)}`)
           if (isTooManyLogs(msg)) throw e   // D47：>10k logs 不是限流，立刻交給 getLogsChunked 對半切，不進退避
           // public RPC 對 getLogs 有突發限流（DECISIONS 11.5、D47）；最多 12 次退避，上限 60 秒（合計約 8 分鐘）
