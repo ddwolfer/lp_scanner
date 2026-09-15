@@ -18,8 +18,27 @@ export class Limiter {
   }
 }
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
-/** viem 錯誤的可比對字串：message 之外還有 details / shortMessage / cause（429、exceeds limit 都在 details）；非物件就 String(e)（Codex review D57） */
-export const errText = (e: unknown) => { const ex = e as any; const parts = ex && typeof ex === 'object' ? [ex.message, ex.details, ex.shortMessage, ex.cause?.message, ex.status] : []; const s = parts.filter(Boolean).join(' | '); return s || String(e) }
+/** 沿著 cause 走訪錯誤鏈（viem 會把 HttpRequestError 包在 ContractFunctionExecutionError 底下）（D59，Codex review） */
+const chain = (e: unknown, max = 6): any[] => { const out: any[] = []; let cur: any = e
+  while (cur && typeof cur === 'object' && out.length < max) { out.push(cur); cur = cur.cause }
+  return out }
+/** viem 錯誤的可比對字串：message 之外還有 details / shortMessage / status，整條 cause 鏈都要看（D57、D59） */
+export const errText = (e: unknown) => {
+  if (!e || typeof e !== 'object') return String(e)
+  const s = chain(e).flatMap(x => [x.message, x.details, x.shortMessage, x.status]).filter(Boolean).join(' | ')
+  return s || String(e)
+}
+/** 可重試：HTTP 429 與任何 5xx（含 Cloudflare 專用的 520–524）、連線層錯誤、逾時。
+ *  狀態碼優先，整條 cause 鏈上第一個有狀態碼的為準；沒有狀態碼才看錯誤名稱與字串，
+ *  且不用鬆散的數字比對（errText 含請求內文，會誤中區塊號）（D59，Codex review） */
+export const isRetryable = (e: unknown, text = errText(e)) => {
+  for (const x of chain(e)) {
+    const raw = x?.status; const st = raw === undefined || raw === null ? null : Number(raw)
+    if (st !== null && Number.isFinite(st)) return st === 429 || (st >= 500 && st < 600)   // 4xx（429 除外）是永久錯誤
+  }
+  if (chain(e).some(x => /^(HttpRequestError|TimeoutError|SocketClosedError)$/.test(String(x?.name ?? '')))) return true
+  return /429|Too Many Requests|compute units|exceeded|timed? ?out|ECONNRESET|ECONNREFUSED|EPIPE|ETIMEDOUT|fetch failed|socket hang up|other side closed|terminated|network socket disconnected|Bad Gateway|Service Unavailable|Gateway Time-?out|Internal Server Error/i.test(text)
+}
 export const isTooManyLogs = (e: unknown) => /exceeds limit|Missing or invalid parameters|query returned more than|response size/i.test(errText(e))
 export interface Rpc {
   client: PublicClient
@@ -48,8 +67,8 @@ export function makeRpc(o: { usage: ApiUsage; url?: string; concurrency?: number
           const msg = errText(e)
           if (process.env.RPC_DEBUG) console.error(`[rpc] attempt ${attempt} err: ${msg.split('\n')[0].slice(0, 120)}`)
           if (isTooManyLogs(msg)) throw e   // D47：>10k logs 不是限流，立刻交給 getLogsChunked 對半切，不進退避
-          // public RPC 對 getLogs 有突發限流（DECISIONS 11.5、D47）；最多 12 次退避，上限 60 秒（合計約 8 分鐘）
-          if (attempt < 12 && /429|Too Many|compute units|exceeded|timeout|timed out|ECONNRESET|fetch failed|503|502/i.test(msg)) { await sleep(Math.min(60_000, 1000 * 2 ** attempt) + Math.random() * 500); continue }
+          // public RPC 對 getLogs 有突發限流與 Cloudflare 錯誤頁（D59）；最多 12 次退避，上限 60 秒（合計約 8 分鐘）
+          if (attempt < 12 && isRetryable(e, msg)) { await sleep(Math.min(60_000, 1000 * 2 ** attempt) + Math.random() * 500); continue }
           throw e
         }
       }

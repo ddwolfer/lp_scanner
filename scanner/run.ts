@@ -3,7 +3,7 @@ import 'dotenv/config'
 import { openDb, getMeta, setMeta } from '../db/index.js'
 import { ADDR, CHAIN, loadScoring } from '../config/chain.js'
 import { ApiUsage } from './sources/usage.js'
-import { makeRpc } from './sources/rpc.js'
+import { makeRpc, errText } from './sources/rpc.js'
 import { fetchAssets, fetchCorporateActions, fetchPrice, type RhQuote } from './sources/robinhood.js'
 import { fetchTokenPairs } from './sources/dexscreener.js'
 import { discoverUsdgPools, fetchSwaps } from './sources/uniswapV4.js'
@@ -91,7 +91,7 @@ export async function runDaily(opts: { dbPath?: string; now?: Date; simOnly?: bo
       let hourly: ReturnType<typeof aggregateHourly> = []; let swapFetchFailed = false; let feeObserved: number | null = null
       if (worth) {
         try { const sw = p.protocol === 'v3' ? await fetchV3Swaps(rpc, p.pool_id, p.fee_ppm, dayFrom, latest) : await fetchSwaps(rpc, p.pool_id, dayFrom, latest); hourly = aggregateHourly(sw, interp, !!p.stock_is_token0, tsFrom, tsTo); feeObserved = median(sw.map(x => x.fee)) }
-        catch (e) { swapFetchFailed = true; swapFailed++; log(`swaps ${p.pool_id.slice(0, 10)}: ${String((e as Error).message).split('\n')[0]}`) }
+        catch (e) { swapFetchFailed = true; swapFailed++; log(`swaps ${p.pool_id.slice(0, 10)}: ${errText(e).replace(/\s+/g, ' ').slice(0, 160)}`) }   // D59：印 errText 才看得到真正原因
       }
       if (hourly.length) writeHourly(db, p.pool_id, hourly)
       const volume = hourly.reduce((a, r) => a + r.volumeUsd, 0), fees = hourly.reduce((a, r) => a + r.feesUsd, 0), swaps = hourly.reduce((a, r) => a + r.swapCount, 0)
