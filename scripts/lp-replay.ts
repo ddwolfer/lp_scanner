@@ -1,11 +1,13 @@
 // scripts/lp-replay.ts — CLI：pnpm replay <poolId | SYMBOL | SYM0/SYM1> [--days=5] [--d=1000] [--ranges=5,10,25 | --lower=<顯示價> --upper=<顯示價>] [--from=<block>] [--to=<block>] [--fee=0.05]
 import { openDb } from '../db/index.js'
 import { CHAIN } from '../config/chain.js'
-import { makeCtx, resolvePool, loadSwaps, tsOf, replayWindow, showP, type Case } from './lib/replay-core.js'
+import { makeCtx, resolvePool, loadSwaps, tsOf, replayWindow, showP, loadProtocolFeeAt, type Case } from './lib/replay-core.js'
 const args = process.argv.slice(2); const target = args.find(a => !a.startsWith('--'))!; const opt = (k: string, d: string) => (args.find(a => a.startsWith(`--${k}=`)) ?? `--${k}=${d}`).split('=')[1]
 const ctx = makeCtx(openDb('db/lp.sqlite')); const pool = await resolvePool(ctx, target, Number(opt('fee', '0.05')))
 const latest = await ctx.rpc.getBlockNumber(); const to = BigInt(opt('to', latest.toString())), from = BigInt(opt('from', (to - BigInt(Number(opt('days', '5')) * CHAIN.blocksPerDay)).toString()))
-const [t0, t1] = await Promise.all([tsOf(ctx, from), tsOf(ctx, to)]); const sw = await loadSwaps(ctx, pool, from, to)
+const [t0, t1] = await Promise.all([tsOf(ctx, from), tsOf(ctx, to)])
+await loadProtocolFeeAt(ctx, pool, from, to)   // D60：用窗口起點的協議費，頭尾不一致會警告
+const sw = await loadSwaps(ctx, pool, from, to)
 const yConst = ctx.usdPrice(pool.token1) ?? 1; const yUsd = (P: number) => pool.token1 === ctx.sym(pool.token1) && false ? 1 : pool.inv ? 1 / P : (pool.token1.toLowerCase() === '0x5fc5360d0400a0fd4f2af552add042d716f1d168' ? 1 : yConst)
 const P0 = (sw[0].sqrtPriceX96 ? (Number(sw[0].sqrtPriceX96) / 2 ** 96) ** 2 * 10 ** (pool.d0 - pool.d1) : 1); const disp0 = pool.inv ? 1 / P0 : P0
 const cases: Case[] = args.some(a => a.startsWith('--lower=')) ? [{ label: `[${opt('lower', '')}–${opt('upper', '')}]`, lower: Number(opt('lower', '')), upper: Number(opt('upper', '')) }] : opt('ranges', '5,10,25').split(',').map(Number).map(R => ({ label: `±${R}%`, lower: disp0 * (1 - R / 100), upper: disp0 * (1 + R / 100) }))

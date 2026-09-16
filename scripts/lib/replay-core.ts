@@ -9,8 +9,9 @@ import { makeRpc, type Rpc } from '../../scanner/sources/rpc.js'
 import { INITIALIZE_EVENT, decodeInitialize, fetchSwaps, type SwapLog } from '../../scanner/sources/uniswapV4.js'
 import { liquidityForDeposit, positionAmounts, positionValue } from '../../scanner/metrics/lp-math.js'
 import { parseAbi } from 'viem'
+import { lpFeePpm } from '../../scanner/metrics/protocolFee.js'
 
-export interface PoolInfo { poolId: string; token0: string; token1: string; feePpm: number; tickSpacing: number; d0: number; d1: number; inv: boolean; name: string; createdBlock: bigint | null }
+export interface PoolInfo { poolId: string; token0: string; token1: string; feePpm: number; tickSpacing: number; d0: number; d1: number; inv: boolean; name: string; createdBlock: bigint | null; pf?: { ppm0: number; ppm1: number } | null }
 export interface Case { label: string; lower: number; upper: number }   // 顯示價
 export interface Row { label: string; Pl: number; Pu: number; inRange: number; exits: number; share: number; shareP95: number; shareMax: number; exactDiluted: number | null; est: number; exact: number | null; adjusted: string; fee: number; il: number; net: number; retention: number; vs5050: number; hodlUsd: number }
 export interface WindowResult { name: string; from: bigint; to: bigint; t0: number; t1: number; hours: number; swaps: number; disp0: number; dispEnd: number; totalFeeUsd: number; sigmaHourly: number; rows: Row[] }
@@ -40,7 +41,10 @@ export async function resolvePool(ctx: Ctx, target: string, feePct = 0.05): Prom
     p = { poolId: f.poolId, token0: c0, token1: c1, feePpm, tickSpacing: f.tickSpacing, createdBlock: f.createdBlock }
   } else { const r = db.prepare(`SELECT p.* FROM pools p JOIN tokens t ON t.address=(CASE WHEN p.stock_is_token0 THEN p.token0 ELSE p.token1 END) JOIN pool_snapshots s ON s.pool_id=p.pool_id AND s.date=(SELECT MAX(date) FROM pool_snapshots) WHERE t.symbol=? AND s.excluded=0 AND p.protocol='v4' ORDER BY s.tvl_usd DESC LIMIT 1`).get(target.toUpperCase()) as any; if (!r) throw new Error('no candidate pool'); p = { poolId: r.pool_id, token0: r.token0, token1: r.token1, feePpm: r.fee_ppm, tickSpacing: r.tick_spacing, createdBlock: r.created_block ? BigInt(r.created_block) : null } }
   const d0 = ctx.decimals(p.token0), d1 = ctx.decimals(p.token1)
-  return { ...p, d0, d1, inv: p.token0 === ADDR.usdg, name: `${ctx.sym(p.token0)}/${ctx.sym(p.token1)} v4 ${(p.feePpm / 1e4).toFixed(2)}%` }
+  let pf: { ppm0: number; ppm1: number } | null = null
+  try { const r = await ctx.rpc.call(() => ctx.rpc.client.readContract({ address: ADDR.stateView, abi: parseAbi(['function getSlot0(bytes32 poolId) view returns (uint160 sqrtPriceX96, int24 tick, uint24 protocolFee, uint24 lpFee)']), functionName: 'getSlot0', args: [p.poolId as `0x${string}`] })) as any
+    pf = { ppm0: Number(r[2]) & 0xfff, ppm1: (Number(r[2]) >> 12) & 0xfff } } catch { pf = null }
+  return { ...p, d0, d1, pf, inv: p.token0 === ADDR.usdg, name: `${ctx.sym(p.token0)}/${ctx.sym(p.token1)} v4 ${(p.feePpm / 1e4).toFixed(2)}%` }
 }
 
 /** swap 快取在 scratchpad（同池同區段不重抓） */
@@ -61,7 +65,9 @@ export async function replayWindow(ctx: Ctx, pool: PoolInfo, swAll: SwapLog[], f
   const interp = (b: bigint) => t0 + Number(b - from) * (t1 - t0) / Number(to - from)
   const H = new Map<number, { p: number; f: number; l: bigint }>()
   for (const s of sw) { const h = Math.floor(interp(s.blockNumber) / 3600); const P = (Number(s.sqrtPriceX96) / 2 ** 96) ** 2 * 10 ** (d0 - d1)
-    const fY = (s.amount1 < 0n ? Number(-s.amount1) / 10 ** d1 : Number(-s.amount0) / 10 ** d0 * P) * s.fee / 1e6   // 輸入側 × 費率 → Y
+    // 輸入側 × LP 實得費率（扣協議費，D60）→ Y
+    const lpPpm = lpFeePpm(s.fee, s.amount0 < 0n, pool.pf ?? null, pool.feePpm) ?? s.fee
+    const fY = (s.amount1 < 0n ? Number(-s.amount1) / 10 ** d1 : Number(-s.amount0) / 10 ** d0 * P) * lpPpm / 1e6
     const r = H.get(h) ?? { p: P, f: 0, l: s.liquidity }; r.p = P; r.f += fY; r.l = s.liquidity; H.set(h, r) }
   const hs = [...H.values()]; const P0 = hs[0].p, Pend = hs[hs.length - 1].p; const Y0 = yUsd(P0, t0), Y1 = yUsd(Pend, t1)
   const lr: number[] = []; for (let i = 1; i < hs.length; i++) lr.push(Math.log(hs[i].p / hs[i - 1].p)); const m = lr.reduce((a, b) => a + b, 0) / lr.length; const sigmaHourly = Math.sqrt(lr.reduce((a, b) => a + (b - m) ** 2, 0) / lr.length)
@@ -103,6 +109,22 @@ export async function replayWindow(ctx: Ctx, pool: PoolInfo, swAll: SwapLog[], f
   const disp = (P: number) => pool.inv ? 1 / P : P
   return { name: pool.name, from, to, t0, t1, hours: hs.length, swaps: sw.length, disp0: disp(P0), dispEnd: disp(Pend), totalFeeUsd: hs.reduce((a, h) => a + h.f, 0) * Y1, sigmaHourly, rows }
 }
+/** 讀協議費（Alchemy 有歷史狀態）。回放要用窗口當時的設定，不是今天的。
+ *  協議費是治理參數、極少變動，逐筆 swap 查會是數千次歷史呼叫；改查窗口頭尾兩點，不一致就警告（D60，Codex review） */
+export async function loadProtocolFeeAt(ctx: Ctx, pool: PoolInfo, block: bigint, endBlock?: bigint): Promise<void> {
+  const c = ctx.arpc ?? ctx.rpc
+  const read = async (b: bigint) => {
+    const r = await c.call(() => c.client.readContract({ address: ADDR.stateView, abi: parseAbi(['function getSlot0(bytes32 poolId) view returns (uint160 sqrtPriceX96, int24 tick, uint24 protocolFee, uint24 lpFee)']), functionName: 'getSlot0', args: [pool.poolId as `0x${string}`], blockNumber: b })) as any
+    return { ppm0: Number(r[2]) & 0xfff, ppm1: (Number(r[2]) >> 12) & 0xfff }
+  }
+  try {
+    const a = await read(block); pool.pf = a
+    if (endBlock !== undefined && endBlock !== block) {
+      const b = await read(endBlock)
+      if (b.ppm0 !== a.ppm0 || b.ppm1 !== a.ppm1) console.error(`[警告] ${pool.name} 的協議費在窗口內變動（${a.ppm0}/${a.ppm1} → ${b.ppm0}/${b.ppm1}），手續費以起點設定計算`)
+    }
+  } catch { /* 讀不到就沿用 resolvePool 當下的值 */ }
+}
 export const showP = (pool: PoolInfo, P: number) => (pool.inv ? 1 / P : P).toFixed(pool.inv ? 2 : 4)
 
 // ---- 有狀態的區間管理策略模擬（D55）：整段時間一個頭寸，依策略重開，扣 swap 費 + gas。手續費用小時估計（份額法），SPY/QQQ 這類池已知偏高。
@@ -110,7 +132,8 @@ export interface HourRow { ts: number; p: number; f: number; l: bigint }
 export function hourlyRows(pool: PoolInfo, sw: SwapLog[], from: bigint, to: bigint, t0: number, t1: number): HourRow[] {
   const { d0, d1 } = pool; const interp = (b: bigint) => t0 + Number(b - from) * (t1 - t0) / Number(to - from); const H = new Map<number, HourRow>()
   for (const s of sw) { if (s.blockNumber < from || s.blockNumber > to) continue; const h = Math.floor(interp(s.blockNumber) / 3600); const P = (Number(s.sqrtPriceX96) / 2 ** 96) ** 2 * 10 ** (d0 - d1)
-    const fY = (s.amount1 < 0n ? Number(-s.amount1) / 10 ** d1 : Number(-s.amount0) / 10 ** d0 * P) * s.fee / 1e6
+    const lpPpm = lpFeePpm(s.fee, s.amount0 < 0n, pool.pf ?? null, pool.feePpm) ?? s.fee   // D60
+    const fY = (s.amount1 < 0n ? Number(-s.amount1) / 10 ** d1 : Number(-s.amount0) / 10 ** d0 * P) * lpPpm / 1e6
     const r = H.get(h) ?? { ts: h * 3600, p: P, f: 0, l: s.liquidity }; r.p = P; r.f += fY; r.l = s.liquidity; H.set(h, r) }
   return [...H.values()].sort((a, b) => a.ts - b.ts)
 }

@@ -6,8 +6,8 @@ import { ApiUsage } from './sources/usage.js'
 import { makeRpc, errText } from './sources/rpc.js'
 import { fetchAssets, fetchCorporateActions, fetchPrice, type RhQuote } from './sources/robinhood.js'
 import { fetchTokenPairs } from './sources/dexscreener.js'
-import { discoverUsdgPools, fetchSwaps } from './sources/uniswapV4.js'
-import { discoverV3UsdgPools, fetchV3Swaps, fetchV3LiquidityEvents } from './sources/uniswapV3.js'
+import { discoverUsdgPools, fetchSwaps, readV4ProtocolFee } from './sources/uniswapV4.js'
+import { discoverV3UsdgPools, fetchV3Swaps, fetchV3LiquidityEvents, readV3ProtocolFee } from './sources/uniswapV3.js'
 import { aggregateHourly } from './metrics/hourly.js'
 import { ageDays, vol7, priceDevPct } from './metrics/derived.js'
 import { hardExclusions } from './metrics/exclusions.js'
@@ -77,6 +77,18 @@ export async function runDaily(opts: { dbPath?: string; now?: Date; simOnly?: bo
     const tsTo = Number((await rpc.call(() => rpc.client.getBlock({ blockNumber: latest }))).timestamp)
     const interp = (b: bigint) => tsFrom + Number(b - dayFrom) * (tsTo - tsFrom) / Number(latest - dayFrom)   // DECISIONS D12
     const nextCa = db.prepare(`SELECT MIN(effective_at) e FROM corporate_actions WHERE token=? AND effective_at>=?`)
+    // D60：協議費（LP 實得 = 交易者總費 − 協議費）。靜態 v4 可由事件反推、不必上鏈；v3 與動態費率 v4 需讀 slot0，快取 7 天。
+    const savePf = db.prepare(`UPDATE pools SET pf_ppm0=?, pf_ppm1=?, pf_block=? WHERE pool_id=?`)
+    const PF_TTL = BigInt(7 * CHAIN.blocksPerDay)
+    const protocolFeeFor = async (pool: any, head: bigint) => {
+      const fresh = pool.pf_block !== null && pool.pf_ppm0 !== null && head - BigInt(pool.pf_block) < PF_TTL
+      if (fresh) return { ppm0: pool.pf_ppm0 as number, ppm1: pool.pf_ppm1 as number }
+      if (pool.protocol !== 'v3' && pool.fee_ppm !== null && pool.pf_ppm0 === null) return null   // 靜態 v4：交給 lpFeePpm 由事件反推
+      try {
+        const pf = pool.protocol === 'v3' ? await readV3ProtocolFee(rpc, pool.pool_id, pool.fee_ppm) : await readV4ProtocolFee(rpc, pool.pool_id)
+        savePf.run(pf.ppm0, pf.ppm1, Number(head), pool.pool_id); pool.pf_ppm0 = pf.ppm0; pool.pf_ppm1 = pf.ppm1; return pf
+      } catch { return pool.pf_ppm0 !== null ? { ppm0: pool.pf_ppm0 as number, ppm1: pool.pf_ppm1 as number } : null }   // 讀不到就沿用舊值，再不行回 null（會標記未知）
+    }
     for (const p of pools) {
       poolsScanned++
       const stockAddr: string = p.stock_is_token0 ? p.token0 : p.token1; const asset = stockByAddr.get(stockAddr)
@@ -90,7 +102,12 @@ export async function runDaily(opts: { dbPath?: string; now?: Date; simOnly?: bo
       if (worth) swapPools++
       let hourly: ReturnType<typeof aggregateHourly> = []; let swapFetchFailed = false; let feeObserved: number | null = null
       if (worth) {
-        try { const sw = p.protocol === 'v3' ? await fetchV3Swaps(rpc, p.pool_id, p.fee_ppm, dayFrom, latest) : await fetchSwaps(rpc, p.pool_id, dayFrom, latest); hourly = aggregateHourly(sw, interp, !!p.stock_is_token0, tsFrom, tsTo); feeObserved = median(sw.map(x => x.fee)) }
+        try {
+          const pf = await protocolFeeFor(p, latest)
+          const sw = p.protocol === 'v3' ? await fetchV3Swaps(rpc, p.pool_id, p.fee_ppm, dayFrom, latest) : await fetchSwaps(rpc, p.pool_id, dayFrom, latest)
+          hourly = aggregateHourly(sw, interp, !!p.stock_is_token0, tsFrom, tsTo, { protocolFee: pf, staticFeePpm: p.fee_ppm, inputIsNegative: p.protocol !== 'v3' })
+          feeObserved = median(sw.map(x => x.fee))   // D60：維持「交易者付的總費」；費率區間排除與顯示都以它為準，LP 實得只影響 fees_24h_usd
+        }
         catch (e) { swapFetchFailed = true; swapFailed++; log(`swaps ${p.pool_id.slice(0, 10)}: ${errText(e).replace(/\s+/g, ' ').slice(0, 160)}`) }   // D59：印 errText 才看得到真正原因
       }
       if (hourly.length) writeHourly(db, p.pool_id, hourly)
@@ -112,10 +129,13 @@ export async function runDaily(opts: { dbPath?: string; now?: Date; simOnly?: bo
       if (swapFetchFailed) flags.push('swap_fetch_failed')
       if (tvlStale) flags.push('tvl_stale')
       if (refWide) flags.push('ref_wide_spread')
+      const pfUnknown = hourly.some(h => h.protocolFeeUnknown)
+      if (pfUnknown) flags.push('protocol_fee_unknown')   // D60：算不出 LP 實得費率，這池的費仍是交易者總費
       writeSnapshot(db, { pool_id: p.pool_id, date, is_weekday: isUsWeekday(now) ? 1 : 0, tvl_usd: tvl, volume_24h_usd: volume, fees_24h_usd: fees, price_usd: lastPrice,
         price_ref_usd: refWide ? null : quote?.mid ?? null, price_dev_pct: lastPrice !== null && !refWide ? priceDevPct(lastPrice, quote?.mid ?? null, Number(asset?.currentMultiplier ?? 1)) : null,
         swap_count: swaps, fee_ppm_observed: feeObserved, vol_6h_usd: hourly.slice(-6).reduce((a, r) => a + r.volumeUsd, 0), vol_1h_usd: hourly.slice(-1).reduce((a, r) => a + r.volumeUsd, 0), age_days: age, vol7_avg_usd: v7.avg, vol7_cv: v7.cv, raw_apr: tvl && tvl > 0 ? fees * 365 / tvl : null,
-        flags, excluded: flags.some(f => !['short_history', 'swap_fetch_failed', 'tvl_stale', 'hook_fee_only', 'ref_wide_spread'].includes(f)) ? 1 : 0 })
+        flags, fee_basis: pfUnknown ? 'gross' : 'lp_net',
+        excluded: flags.some(f => !['short_history', 'swap_fetch_failed', 'tvl_stale', 'hook_fee_only', 'ref_wide_spread', 'protocol_fee_unknown'].includes(f)) ? 1 : 0 })
       if (poolsScanned % 25 === 0) log(`pools ${poolsScanned}/${pools.length} (calls ${JSON.stringify(usage.toJSON())})`)
     }
     } else { poolsScanned = (db.prepare('SELECT COUNT(*) c FROM pool_snapshots WHERE date=?').get(date) as any).c; log(`sim-only: ${poolsScanned} snapshots for ${date}`) }

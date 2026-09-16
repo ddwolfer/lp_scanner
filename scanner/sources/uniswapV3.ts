@@ -1,5 +1,6 @@
 // scanner/sources/uniswapV3.ts — Uniswap v3：Factory 發現、池合約 Swap / Mint / Burn log。只讀
 import { parseAbiItem, parseAbi } from 'viem'
+import { decodeV3ProtocolFee } from '../metrics/protocolFee.js'
 import { ADDR } from '../../config/chain.js'
 import type { Rpc } from './rpc.js'
 import type { DiscoveredPool, SwapLog } from './uniswapV4.js'
@@ -38,4 +39,11 @@ export async function fetchV3LiquidityEvents(rpc: Rpc, pool: string, from: bigin
     rpc.getLogsChunked({ address: pool as `0x${string}`, event: V3_BURN_EVENT }, from, to),
   ])
   return [...m, ...b].map((l: any) => ({ txHash: String(l.transactionHash), sender: String(l.args.owner).toLowerCase() }))
+}
+
+/** 讀 v3 池的協議費（slot0.feeProtocol）。D60 */
+export async function readV3ProtocolFee(rpc: Rpc, pool: string, poolFeePpm: number): Promise<{ ppm0: number; ppm1: number }> {
+  const abi = parseAbi(['function slot0() view returns (uint160 sqrtPriceX96, int24 tick, uint16 a, uint16 b, uint16 c, uint8 feeProtocol, bool unlocked)'])
+  const r = await rpc.call(() => rpc.client.readContract({ address: pool as `0x${string}`, abi, functionName: 'slot0' })) as any
+  return decodeV3ProtocolFee(r[5], poolFeePpm)
 }

@@ -1,5 +1,6 @@
 // scanner/sources/uniswapV4.ts — 只讀 log 與 view 函式，無任何寫入路徑
 import { parseAbiItem, parseAbi } from 'viem'
+import { decodeV4ProtocolFee } from '../metrics/protocolFee.js'
 import { ADDR, DYNAMIC_FEE_FLAG } from '../../config/chain.js'
 import type { Rpc } from './rpc.js'
 
@@ -42,4 +43,11 @@ export async function readSlot0(rpc: Rpc, poolId: string) {
 export async function fetchModifyLiquidity(rpc: Rpc, poolId: string, from: bigint, to: bigint): Promise<{ txHash: string; sender: string }[]> {
   const logs = await rpc.getLogsChunked({ address: ADDR.poolManager, event: MODIFY_LIQUIDITY_EVENT, args: { id: poolId } }, from, to)
   return logs.map((l: any) => ({ txHash: String(l.transactionHash), sender: String(l.args.sender).toLowerCase() }))
+}
+
+/** 讀 v4 池的協議費（StateView.getSlot0）。D60 */
+export async function readV4ProtocolFee(rpc: Rpc, poolId: string): Promise<{ ppm0: number; ppm1: number }> {
+  const abi = parseAbi(['function getSlot0(bytes32 poolId) view returns (uint160 sqrtPriceX96, int24 tick, uint24 protocolFee, uint24 lpFee)'])
+  const r = await rpc.call(() => rpc.client.readContract({ address: ADDR.stateView, abi, functionName: 'getSlot0', args: [poolId as `0x${string}`] })) as any
+  return decodeV4ProtocolFee(r[2])
 }

@@ -22,9 +22,14 @@ function migrate(db: Database.Database) {
   if (!cols.has('fee_ppm_observed')) db.exec('ALTER TABLE pool_snapshots ADD COLUMN fee_ppm_observed INTEGER')
   if (!cols.has('vol_6h_usd')) db.exec('ALTER TABLE pool_snapshots ADD COLUMN vol_6h_usd REAL')
   if (!cols.has('vol_1h_usd')) db.exec('ALTER TABLE pool_snapshots ADD COLUMN vol_1h_usd REAL')
+  if (!cols.has('fee_basis')) db.exec("ALTER TABLE pool_snapshots ADD COLUMN fee_basis TEXT")   // D60：'gross'（舊，含協議費）或 'lp_net'
   const pcols = new Set((db.prepare('PRAGMA table_info(pools)').all() as { name: string }[]).map(c => c.name))
   if (!pcols.has('hook_kind')) db.exec('ALTER TABLE pools ADD COLUMN hook_kind TEXT')
   if (!pcols.has('hook_flags')) db.exec('ALTER TABLE pools ADD COLUMN hook_flags TEXT')
+  // D60：協議費（ppm，按輸入方向）與讀取當下的區塊，用來把交易者付的總費換算成 LP 實得
+  if (!pcols.has('pf_ppm0')) db.exec('ALTER TABLE pools ADD COLUMN pf_ppm0 INTEGER')
+  if (!pcols.has('pf_ppm1')) db.exec('ALTER TABLE pools ADD COLUMN pf_ppm1 INTEGER')
+  if (!pcols.has('pf_block')) db.exec('ALTER TABLE pools ADD COLUMN pf_block INTEGER')
   const rcols = new Set((db.prepare('PRAGMA table_info(scan_runs)').all() as { name: string }[]).map(c => c.name))
   if (!rcols.has('degraded')) db.exec('ALTER TABLE scan_runs ADD COLUMN degraded INTEGER')          // D58：資料不完整（swap 失敗比例高 / 發現失敗）
   if (!rcols.has('alert_sent')) db.exec('ALTER TABLE scan_runs ADD COLUMN alert_sent INTEGER')      // D58：失敗 / 降級通知是否送達

@@ -2,7 +2,7 @@
 // 整段一個頭寸；策略：A 不重開、B 出區間 24h 重開、C 超出邊界 0.25% 重開、D 每週重開；成本 = 重平衡量 × (池費率 + 0.1% 滑價) + gas。
 import { openDb } from '../db/index.js'
 import { CHAIN } from '../config/chain.js'
-import { makeCtx, resolvePool, loadSwaps, tsOf, hourlyRows, simulateStateful, segmentsExactFee, type Policy } from './lib/replay-core.js'
+import { makeCtx, resolvePool, loadSwaps, tsOf, hourlyRows, simulateStateful, segmentsExactFee, type Policy, loadProtocolFeeAt } from './lib/replay-core.js'
 const args = process.argv.slice(2); const opt = (k: string, d: string) => (args.find(a => a.startsWith(`--${k}=`)) ?? `--${k}=${d}`).split('=')[1]
 const WEEKS = Number(opt('weeks', '5')), D_USD = Number(opt('d', '1000')), GAS = Number(opt('gas', '1.5'))
 const ctx = makeCtx(openDb('db/lp.sqlite')); const latest = await ctx.rpc.getBlockNumber(); const from = latest - BigInt(WEEKS * 7 * CHAIN.blocksPerDay)
@@ -13,6 +13,7 @@ console.log(`窗口 ${new Date(t0 * 1000).toISOString().slice(0, 10)} → ${new 
 const f = (v: number) => ('$' + v.toFixed(2)).padStart(8)
 for (const [target, fee, widths] of specs) {
   const pool = await resolvePool(ctx, target, fee); const start = pool.createdBlock && pool.createdBlock > from ? pool.createdBlock : from
+  await loadProtocolFeeAt(ctx, pool, start, latest)   // D60
   const sw = await loadSwaps(ctx, pool, start, latest); const hs = hourlyRows(pool, sw, start, latest, start === from ? t0 : await tsOf(ctx, start), t1)
   const yc = ctx.usdPrice(pool.token1) ?? 1; const yUsd = (P: number) => pool.inv ? 1 / P : (pool.token1 === '0x5fc5360d0400a0fd4f2af552add042d716f1d168' ? 1 : yc)
   console.log(`\n${pool.name} · ${hs.length}h · 顯示價 ${(pool.inv ? 1 / hs[0].p : hs[0].p).toFixed(4)} → ${(pool.inv ? 1 / hs[hs.length - 1].p : hs[hs.length - 1].p).toFixed(4)}`)
