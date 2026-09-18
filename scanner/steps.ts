@@ -113,8 +113,12 @@ export function syncPositions(db: Database.Database, list: OnchainPosition[], st
       const notes = JSON.stringify({ source: 'onchain', protocol: p.protocol ?? 'v4', tokenId: p.tokenId, deposit_estimated: true, tickLower: p.tickLower, tickUpper: p.tickUpper })
       const id = Number(db.prepare(`INSERT INTO positions(pool_id,label,range_lower,range_upper,deposit_usd,opened_at,notes) VALUES (?,?,?,?,?,?,?)`)
         .run(p.poolId, `${sym} ${p.protocol === 'v3' ? 'v3 ' : ''}#${p.tokenId.slice(-4)}`, lo, hi, valueUsd + feesUsd, nowIso, notes).lastInsertRowid)
-      row = { id, pool_id: p.poolId, label: `${sym} ${p.protocol === 'v3' ? 'v3 ' : ''}#${p.tokenId.slice(-4)}`, range_lower: lo, range_upper: hi, closed_at: null }
+      row = { id, pool_id: p.poolId, label: `${sym} ${p.protocol === 'v3' ? 'v3 ' : ''}#${p.tokenId.slice(-4)}`, range_lower: lo, range_upper: hi, closed_at: null, notes }
     }
+    // D61：把鏈上的真實流動性與 tick 存進 notes（加減倉會變，每次同步覆寫），頭寸頁的「跌到下緣要補多少」用它算
+    { const cur = (() => { try { return JSON.parse(row.notes ?? '{}') } catch { return {} } })(); const merged: any = { ...cur, liquidity: p.liquidity.toString(), tickLower: p.tickLower, tickUpper: p.tickUpper }
+      if (cur.liquidity && cur.liquidity !== p.liquidity.toString() && p.liquidity !== 0n) merged.liquidity_changes = [...(cur.liquidity_changes ?? []), { at: nowIso, from: cur.liquidity, to: p.liquidity.toString() }]   // 加減倉：deposit_usd 要人工對帳，同日領回的費視為再投入（D61）
+      if (JSON.stringify(merged) !== JSON.stringify(cur)) { db.prepare('UPDATE positions SET notes=? WHERE id=?').run(JSON.stringify(merged), row.id); row.notes = JSON.stringify(merged) } }
     const closed = p.liquidity === 0n
     if (closed && !row.closed_at) db.prepare('UPDATE positions SET closed_at=? WHERE id=?').run(nowIso, row.id)
     if (!closed && row.closed_at) db.prepare('UPDATE positions SET closed_at=NULL WHERE id=?').run(row.id)
@@ -123,7 +127,7 @@ export function syncPositions(db: Database.Database, list: OnchainPosition[], st
   return out
 }
 export function writePositionSnapshot(db: Database.Database, positionId: number, date: string, v: { valueUsd: number; feesUsd: number; inRange: boolean }) {
-  db.prepare(`INSERT OR REPLACE INTO position_snapshots(position_id,date,value_usd,fees_cum_usd,in_range,gas_cum_usd) VALUES (?,?,?,?,?,NULL)`).run(positionId, date, v.valueUsd, v.feesUsd, v.inRange ? 1 : 0)
+  db.prepare(`INSERT OR REPLACE INTO position_snapshots(position_id,date,value_usd,fees_cum_usd,in_range,gas_cum_usd,taken_at) VALUES (?,?,?,?,?,NULL,?)`).run(positionId, date, v.valueUsd, v.feesUsd, v.inRange ? 1 : 0, new Date().toISOString())
 }
 
 export function setPositionOrigin(db: Database.Database, id: number, openedAtIso: string, depositUsd: number, extraNotes: Record<string, unknown>) {

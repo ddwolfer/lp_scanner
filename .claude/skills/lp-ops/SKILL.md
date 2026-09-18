@@ -48,3 +48,7 @@ pnpm sim-check <poolId> [D] [R] [from] [to]
 另記 TVL 與 24h 量（`pnpm pool TSLA`）。期間不因單次出區間重開；三週後才決定是否放大到 $2–3k。
 - 成本拆兩欄：**已發生**（`pnpm costs` 讀 receipt 的實際 gas + 開倉 swap）與**預估退出**（4 筆 gas + 換回 swap，約 $6），淨值先只扣已發生的，不要一開倉就把退出成本當已實現。
 - 開倉當下的 mint block、價格、實際 tick、AMD/USDG 數量、tx 都由 `pnpm positions` 從鏈上讀進 `positions.notes`（fetchMintInfo），replay 與 HODL 基準一律從 mint block 起算，不用日線近似價。
+
+## 加倉 / 減倉時的記帳規則（D61）
+- v4 加減倉會自動把未領費結算回錢包。`deposit_usd` 只加**外部新投入的現金**；若那筆費又存回部位，在 `adjust` 日誌的 data 寫 `reinvested_usd`，保本線就不會重扣（沒寫會用「與加倉同日的領取」推測）。
+- `collect` 日誌的 data 用 `usd` 記美元總額；沒有日誌時保本線用快照「未領費掉超過一半」自動偵測，但金額是前一天快照值，會少算當天累積的部分。

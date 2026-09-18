@@ -4,7 +4,9 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import { simulateHourly, type SimHour } from '../scanner/metrics/simulate.js'
 import { loadHourly } from '../scanner/steps.js'
 import { rvolRange } from '../scanner/metrics/volatility.js'
-import { lifecycleCost, capacityUsd, volumePersistence } from '../scanner/metrics/economics.js'
+import { lifecycleCost, capacityUsd, volumePersistence, exitBreakeven } from '../scanner/metrics/economics.js'
+import { L_HUMAN_TO_RAW } from '../scanner/metrics/lp-math.js'
+import { taipeiDate } from '../scanner/time.js'
 import { loadScoring } from '../config/chain.js'
 
 const POOL_JOIN = `FROM pool_snapshots s JOIN pools p ON p.pool_id = s.pool_id
@@ -86,6 +88,7 @@ export function closePosition(db: Database.Database, id: number, c: { closed_at:
 }
 /** 頭寸卡片：現值與累積費以最新池價、pool_hourly 從 opened_at 起模擬估算（P5 前的暫代，DECISIONS D27） */
 export function listPositions(db: Database.Database) {
+  const econCfg = loadScoring().economics
   const rows = db.prepare(`SELECT ps.*, t.symbol, p.fee_ppm FROM positions ps JOIN pools p ON p.pool_id=ps.pool_id
     JOIN tokens t ON t.address = CASE WHEN p.stock_is_token0 = 1 THEN p.token0 ELSE p.token1 END ORDER BY ps.id DESC`).all() as any[]
   return rows.map(r => {
@@ -104,7 +107,57 @@ export function listPositions(db: Database.Database) {
     // 每日「實際 vs 模擬」：模擬取該日最後一小時的累積值
     const simByDate = new Map<string, number>(); for (const e of est) simByDate.set(new Date(e.row.ts * 1000).toISOString().slice(0, 10), e.valueH + e.cumFees - r.deposit_usd)
     const history = snaps.map(sn => ({ date: sn.date, actual: sn.value_usd + sn.fees_cum_usd - r.deposit_usd, sim: simByDate.get(sn.date) ?? null }))
-    return { ...r, notes_json: notes, journal: listJournal(db, r.id), est: last ? { value_usd: last.valueH, fees_cum_usd: last.cumFees, in_range: last.inRange, net_usd: last.valueH + last.cumFees - r.deposit_usd, price: last.row.priceUsd, hours: est.length } : null,
+    // D61：持倉中的保本線。L 用鏈上真實流動性（notes.liquidity，加減倉後仍正確）；已賺的費 = 目前未領 + 日誌裡領過的；
+    // 費速 = 最近 7 天「已賺總額」的差（未領會在領取時歸零，所以要把領取日誌加回去），不足 7 天資料退回持有期平均並標示
+    const journal = listJournal(db, r.id)
+    // 已領的費：從快照偵測「未領費比前一天少」= 中間領過（手動領或加倉時自動結算）；同一段時間若日誌有 collect 的精確金額就用日誌，否則用快照差額（Codex review）
+    const drops: { from: string; to: string; fromAt?: string | null; toAt?: string | null; amount: number }[] = []
+    // 未領費是美元計價，股票側跌價也會讓它變小；只有掉超過一半（領取會歸零）且前值不是零頭才當成領過（Codex review）
+    for (let i = 1; i < snaps.length; i++) if (snaps[i - 1].fees_cum_usd > 0.5 && snaps[i].fees_cum_usd < snaps[i - 1].fees_cum_usd * 0.5) drops.push({ from: snaps[i - 1].date, to: snaps[i].date, fromAt: snaps[i - 1].taken_at, toAt: snaps[i].taken_at, amount: snaps[i - 1].fees_cum_usd })
+    const tp = (iso: string) => taipeiDate(new Date(iso))   // 快照的 date 是台北日期；日誌與流動性變動的時間戳是 UTC ISO，統一換成台北日期再比（Codex review）
+    const collects = journal.filter(j => j.kind === 'collect').map(j => ({ ts: String(j.ts), usd: Number((j.data ?? {}).usd ?? (j.data ?? {}).fees_collected_usd ?? 0) })).filter(c => c.usd > 0)
+    const events: { ts: string; date: string; usd: number }[] = []; const used = new Set<number>()
+    const inInterval = (c: { ts: string }, d: { from: string; to: string; fromAt?: string | null; toAt?: string | null }) =>
+      d.fromAt && d.toAt ? (Date.parse(c.ts) > Date.parse(d.fromAt) && Date.parse(c.ts) <= Date.parse(d.toAt)) : (tp(c.ts) >= d.from && tp(c.ts) <= d.to)   // 舊快照沒時間戳：同日（含 from 當天）的日誌視為同一次領取，不再另加快照差額
+    for (const d of drops) { const k = collects.findIndex((c, idx) => !used.has(idx) && inInterval(c, d)); if (k >= 0) { used.add(k); events.push({ ts: collects[k].ts, date: tp(collects[k].ts), usd: collects[k].usd }) } else events.push({ ts: d.toAt ?? d.to + 'T00:00:00+08:00', date: d.to, usd: d.amount }) }
+    collects.forEach((c, idx) => { if (!used.has(idx)) events.push({ ts: c.ts, date: tp(c.ts), usd: c.usd }) })
+    // 「到某個快照為止」已領多少：有 taken_at 就用時間戳，舊快照退回台北日期
+    const collectedBy = (sn: { date: string; taken_at?: string | null }) => events.filter(e => sn.taken_at ? Date.parse(e.ts) <= Date.parse(sn.taken_at) : e.date <= sn.date).reduce((a, e) => a + e.usd, 0)
+    // 再投入的費：逐日（台北）判斷。該日 adjust 日誌有明寫 reinvested_usd 就用它；沒寫且該日流動性「增加」才把同日領取視為再投入；減倉日的領取是提走的
+    const changes = ((notes?.liquidity_changes ?? []) as { at: string; from: string; to: string }[])
+    const dayBefore = (d: string) => taipeiDate(new Date(Date.parse(d + 'T12:00:00+08:00') - 86400000))   // 以台北時間算前一天
+    // at 是每日同步「觀察到」變動的時間，實際加倉發生在前一次同步之後 → 觀察日與前一日都算（Codex review）；日誌明寫時以日誌為準
+    const increaseDays = new Set(changes.filter(c => { try { return BigInt(c.to) > BigInt(c.from) } catch { return false } }).flatMap(c => [tp(c.at), dayBefore(tp(c.at))]))
+    const explicitByDay = new Map<string, number>()
+    for (const j of journal) if (j.kind === 'adjust' && j.data && j.data.reinvested_usd !== undefined) { const d = tp(String(j.ts)); explicitByDay.set(d, (explicitByDay.get(d) ?? 0) + Number(j.data.reinvested_usd)) }
+    // 每次加倉一個視窗（前一日, 觀察日）：視窗內有明寫就用明寫，否則用視窗內的領取；視窗重疊時事件只用一次（Codex review）
+    const usedDays = new Set<string>(); let reinvested = 0
+    for (const c of changes) { let inc = false; try { inc = BigInt(c.to) > BigInt(c.from) } catch { }
+      if (!inc) continue
+      const win = [dayBefore(tp(c.at)), tp(c.at)].filter(d => !usedDays.has(d)); win.forEach(d => usedDays.add(d))
+      const ex = win.reduce((a, d) => a + (explicitByDay.get(d) ?? 0), 0)
+      reinvested += win.some(d => explicitByDay.has(d)) ? ex : events.filter(e => win.includes(e.date)).reduce((a, e) => a + e.usd, 0) }
+    for (const [d, v] of explicitByDay) if (!usedDays.has(d)) { reinvested += v; usedDays.add(d) }   // 日誌明寫但沒觀察到流動性變動（舊資料）
+    void increaseDays
+    const liqChangeDays = new Set(changes.map(c => tp(c.at)))
+    let breakeven: any = null
+    if (actual && !r.closed_at && notes?.liquidity && hours.length) {
+      const Pnow = hours[hours.length - 1].priceUsd ?? null
+      const earnedNow = latest.fees_cum_usd + collectedBy(latest)
+      const cutoff = new Date(Date.parse(latest.date) - 7 * 86400000).toISOString().slice(0, 10)
+      const ref = [...snaps].reverse().find(sn => sn.date <= cutoff) ?? snaps[0]
+      const spanDays = Math.max(1, (Date.parse(latest.date) - Date.parse(ref.date)) / 86400000)
+      const earnedRef = ref === latest ? 0 : ref.fees_cum_usd + collectedBy(ref)
+      const pace = ref === latest ? earnedNow / Math.max(1, actual.days) : (earnedNow - earnedRef) / spanDays
+      const paceBasis = ref === latest ? '持有期平均' : snaps.length && ref.date <= cutoff ? '近 7 天' : `近 ${Math.round(spanDays)} 天`
+      if (Pnow && Pnow > 0) {
+        const costsIncurred = journal.filter(j => (j.kind === 'open' || j.kind === 'adjust' || j.kind === 'collect') && j.data).reduce((a, j) => a + Number(j.data.costs_usd ?? 0) + Number(j.data.gas_usd ?? 0), 0)   // 已發生的進場成本（Codex review）
+        const be = exitBreakeven({ D: r.deposit_usd, P0: Pnow, Pl: r.range_lower, Pu: r.range_upper, L: Number(notes.liquidity) / L_HUMAN_TO_RAW, dailyFeeUsd: pace > 0 ? pace : null,
+          swapFeeRate: (((db.prepare('SELECT fee_ppm_observed f FROM pool_snapshots WHERE pool_id=? AND fee_ppm_observed IS NOT NULL ORDER BY date DESC LIMIT 1').get(r.pool_id) as any)?.f ?? r.fee_ppm ?? 3000) / 1e6) + 0.001, /* 觀察到的是交易者付的總費（含協議費），動態池也適用 */ gasPerTx: econCfg.gas_usd_per_tx, txs: 2, live: { feesEarnedUsd: earnedNow - reinvested, costsIncurredUsd: costsIncurred } })
+        breakeven = { lower: be.lower, upper: be.upper, paceUsdPerDay: pace, paceBasis, feesEarnedUsd: earnedNow, feesReinvestedUsd: reinvested, priceNow: Pnow, capitalChanged: liqChangeDays.size > 0 }   // 加減倉後 deposit_usd 需人工確認（Codex review）
+      }
+    }
+    return { ...r, notes_json: notes, journal, breakeven, est: last ? { value_usd: last.valueH, fees_cum_usd: last.cumFees, in_range: last.inRange, net_usd: last.valueH + last.cumFees - r.deposit_usd, price: last.row.priceUsd, hours: est.length } : null,
       actual, history, curve: est.map(e => ({ ts: e.row.ts, net: e.valueH + e.cumFees - r.deposit_usd })), final: finalSnap ? { value_usd: finalSnap.value_usd, fees_cum_usd: finalSnap.fees_cum_usd } : null }
   })
 }

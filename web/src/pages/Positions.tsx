@@ -61,6 +61,10 @@ export default function Positions() {
               <tr><td className="l">價格損益<small>持有股票漲跌 + IL</small></td>{cell(a.px)}{cell(m?.px)}{cell(m ? a.px - m.px : null)}</tr>
               <tr><td className="l"><b>淨損益</b></td>{cell(a.net)}{cell(m?.net)}{cell(m ? a.net - m.net : null)}</tr>
             </tbody></table>
+            {p.breakeven && (() => { const b = p.breakeven; const lo = b.lower
+              return <div className="muted" style={{ fontSize: 13, marginTop: 6, padding: '6px 8px', border: '1px solid #262b34', borderRadius: 6 }} title="跌到區間下緣時會全變股票。要補的錢 = 投入 − 那時的市值 + 出場換回 USDG 的磨損 + gas − 已賺的手續費（含領過的）。天數用最近 7 天的費速折算；跌穿後原區間停止收費，這只是「以目前速度」的換算。">
+                <b>保本線</b> · 跌到 {fmtNum(lo.bound, 2)} 時市值 {fmtUsd(lo.valueAtBound, 0)}（帳面 −{fmtUsd(lo.paperLoss, 0)}）· 已賺費 {fmtUsd(b.feesEarnedUsd, 2)}{b.feesReinvestedUsd > 0 && <span>（含再投入 {fmtUsd(b.feesReinvestedUsd, 2)}）</span>} · {lo.covered ? <span className="pos">已被手續費蓋過</span> : <>還差 <b>{fmtUsd(lo.toCoverUsd, 2)}</b>（含出場成本 {fmtUsd(lo.exitSwapUsd + lo.gasUsd, 2)}）· 費速 {fmtUsd(b.paceUsdPerDay, 2)}/天（{b.paceBasis}）→ 約需 <b>{lo.days === null ? '—' : lo.days.toFixed(1) + ' 天'}</b></>}{b.capitalChanged && <span className="neg"> · 流動性變動過，請確認投入基準已更新</span>}
+              </div> })()}
             <div className="muted" style={{ fontSize: 13, marginTop: 4 }}>鏈上現值 {fmtUsd(p.actual.value_usd, 2)} · 投入 {fmtUsd(p.deposit_usd, 2)} · {p.actual.in_range ? '✓ 在區間內' : '✗ 出區間'} · 快照 {p.actual.date} · {p.actual.days} 天{p.est && ` · 模擬涵蓋 ${p.est.hours} 小時`}{p.actual.deposit_estimated && ' · 投入金額為首次看到時的市值（估）'}</div>
             {p.history.length > 1 && <ResponsiveContainer width="100%" height={140}><LineChart data={p.history}><CartesianGrid stroke="#262b34" /><XAxis dataKey="date" tickFormatter={(v: string) => v.slice(5)} /><YAxis width={50} tickFormatter={v => '$' + v.toFixed(0)} /><Tooltip /><Legend /><Line type="monotone" dataKey="actual" name="實際淨損益" stroke="#4fd18b" dot /><Line type="monotone" dataKey="sim" name="模擬淨損益" stroke="#f2b135" dot strokeDasharray="4 3" /></LineChart></ResponsiveContainer>}
           </>

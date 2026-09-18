@@ -30,6 +30,8 @@ function migrate(db: Database.Database) {
   if (!pcols.has('pf_ppm0')) db.exec('ALTER TABLE pools ADD COLUMN pf_ppm0 INTEGER')
   if (!pcols.has('pf_ppm1')) db.exec('ALTER TABLE pools ADD COLUMN pf_ppm1 INTEGER')
   if (!pcols.has('pf_block')) db.exec('ALTER TABLE pools ADD COLUMN pf_block INTEGER')
+  const scols = new Set((db.prepare('PRAGMA table_info(position_snapshots)').all() as { name: string }[]).map(c => c.name))
+  if (!scols.has('taken_at')) db.exec('ALTER TABLE position_snapshots ADD COLUMN taken_at TEXT')   // D61：領費比對要精確的快照時間
   const rcols = new Set((db.prepare('PRAGMA table_info(scan_runs)').all() as { name: string }[]).map(c => c.name))
   if (!rcols.has('degraded')) db.exec('ALTER TABLE scan_runs ADD COLUMN degraded INTEGER')          // D58：資料不完整（swap 失敗比例高 / 發現失敗）
   if (!rcols.has('alert_sent')) db.exec('ALTER TABLE scan_runs ADD COLUMN alert_sent INTEGER')      // D58：失敗 / 降級通知是否送達

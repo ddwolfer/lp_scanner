@@ -1,3 +1,4 @@
+export interface BreakevenSide { bound: number; valueAtBound: number; paperLoss: number; entrySwapUsd: number; exitSwapUsd: number; gasUsd: number; feesEarnedUsd: number; toCoverUsd: number; days: number | null; covered: boolean }
 export type SimResult = { fees_usd: number; value_end_usd: number; il_usd: number; net_usd: number; net_pct: number; net_apr: number; in_range_hours: number; in_range_pct: number; exits: number; hours: number; fees_trimmed_usd?: number; net_trimmed_usd?: number; net_apr_trimmed?: number; top_hour_share?: number; trimmed_hours?: number }
 export type SimJson = { meta: { hours: number; sigma7: number | null; rvol_R: number }; d200: any; d1000: any; d5000: any }
 export type Row = {

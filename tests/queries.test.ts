@@ -56,3 +56,38 @@ it('weekendWindow：UTC 週六 00:00 起 48 小時', () => {
   expect(new Date(weekendWindow(new Date('2026-09-05T10:00:00Z')).from * 1000).toISOString()).toBe('2026-09-05T00:00:00.000Z')   // 週六當天
   expect(new Date(weekendWindow(new Date('2026-09-04T10:00:00Z')).from * 1000).toISOString()).toBe('2026-08-29T00:00:00.000Z')   // 週五 → 上週六
 })
+
+it('D61 保本線：領費由快照歸零自動偵測，日誌有精確值就用日誌；加減倉標記', () => {
+  const db = openDb(':memory:')
+  db.prepare(`INSERT INTO tokens(address,symbol,name,decimals,kind) VALUES ('0xstock','MSTR','MSTR',18,'stock'),('0x5fc5360d0400a0fd4f2af552add042d716f1d168','USDG','USDG',6,'stable')`).run()
+  db.prepare(`INSERT INTO pools(pool_id,protocol,token0,token1,fee_ppm,tick_spacing,hooks,quote_kind,stock_is_token0) VALUES ('0xp','v4','0xstock','0x5fc5360d0400a0fd4f2af552add042d716f1d168',2500,25,'0x0000000000000000000000000000000000000000','usdg',1)`).run()
+  const notes = JSON.stringify({ source: 'onchain', tokenId: '1', liquidity: (0.05 * 1e12).toString(), liquidity_changes: [{ at: '2026-09-11T15:05:00Z', from: '1', to: '2' }] })
+  const id = Number(db.prepare(`INSERT INTO positions(pool_id,label,range_lower,range_upper,deposit_usd,opened_at,notes) VALUES ('0xp','MSTR #1',115,175,1000,'2026-09-04T13:00:00Z',?)`).run(notes).lastInsertRowid)
+  const snap = db.prepare(`INSERT INTO position_snapshots(position_id,date,value_usd,fees_cum_usd,in_range) VALUES (?,?,?,?,1)`)
+  snap.run(id, '2026-09-10', 990, 10.96); snap.run(id, '2026-09-11', 1400, 0); snap.run(id, '2026-09-18', 1408, 21.81)   // 9/11 歸零 = 領過
+  db.prepare(`INSERT INTO position_journal(position_id,ts,kind,text,data) VALUES (?, '2026-09-11T15:05:00Z','collect','x',?)`).run(id, JSON.stringify({ fees_collected_usd: 15.19 }))
+  for (let h = 0; h < 48; h++) db.prepare(`INSERT INTO pool_hourly(pool_id,ts,price_usd,volume_usd,fees_usd,liquidity,swap_count) VALUES ('0xp',?,130,1000,3,'1000000000000000',5)`).run(Date.parse('2026-09-17T00:00:00Z') / 1000 + h * 3600)
+  const p = listPositions(db).find(x => x.id === id)!
+  expect(p.breakeven).not.toBeNull()
+  expect(p.breakeven.feesEarnedUsd).toBeCloseTo(21.81 + 15.19, 6)   // 日誌精確值取代快照差額 10.96
+  expect(p.breakeven.paceUsdPerDay).toBeCloseTo((21.81 + 15.19 - (0 + 15.19)) / 7, 6)
+  expect(p.breakeven.capitalChanged).toBe(true)
+  expect(p.breakeven.feesReinvestedUsd).toBeCloseTo(15.19, 6)   // 9/11 領回的費與加倉同日 → 再投入，保本線只扣 21.81
+  expect(p.breakeven.lower.feesEarnedUsd).toBeCloseTo(21.81, 6)
+  expect(p.breakeven.lower.toCoverUsd).toBeGreaterThan(0)
+  // 減倉日的領取不算再投入：把那次改成減倉，且日誌沒有明寫 → 15.19 全算提走
+  db.prepare(`UPDATE positions SET notes=json_set(notes,'$.liquidity_changes',json('[{"at":"2026-09-11T15:05:00Z","from":"2","to":"1"}]')) WHERE id=?`).run(id)
+  expect(listPositions(db).find(x => x.id === id)!.breakeven.feesReinvestedUsd).toBe(0)
+  db.prepare(`UPDATE positions SET notes=json_set(notes,'$.liquidity_changes',json('[{"at":"2026-09-11T15:05:00Z","from":"1","to":"2"}]')) WHERE id=?`).run(id)
+  // 日誌明寫 reinvested_usd 時以它為準
+  db.prepare(`INSERT INTO position_journal(position_id,ts,kind,text,data) VALUES (?, '2026-09-11T15:06:00Z','adjust','x',?)`).run(id, JSON.stringify({ reinvested_usd: 7.64 }))
+  expect(listPositions(db).find(x => x.id === id)!.breakeven.feesReinvestedUsd).toBeCloseTo(7.64, 6)
+  db.prepare(`DELETE FROM position_journal WHERE kind='adjust'`).run()
+  // 未領費因股價跌而變小（10.96 → 9.5）不算領取
+  snap.run(id, '2026-09-19', 1300, 20.0)
+  const q = listPositions(db).find(x => x.id === id)!
+  expect(q.breakeven.feesEarnedUsd).toBeCloseTo(20.0 + 15.19, 6)
+  // 沒有日誌時退回快照差額
+  db.prepare('DELETE FROM position_journal').run()
+  expect(listPositions(db).find(x => x.id === id)!.breakeven.feesEarnedUsd).toBeCloseTo(20.0 + 10.96, 6)   // 最新快照已是 9/19 的 20.0
+})
