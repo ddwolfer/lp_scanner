@@ -1,7 +1,7 @@
 // server/queries.ts — dashboard 用的唯讀查詢（頭寸登錄除外），可用 :memory: 測試
 import type Database from 'better-sqlite3'
 import { mkdirSync, writeFileSync } from 'node:fs'
-import { simulateHourly, type SimHour } from '../scanner/metrics/simulate.js'
+import { simulateHourly, simulateWithCapital, type SimHour } from '../scanner/metrics/simulate.js'
 import { loadHourly } from '../scanner/steps.js'
 import { rvolRange } from '../scanner/metrics/volatility.js'
 import { lifecycleCost, capacityUsd, volumePersistence, exitBreakeven } from '../scanner/metrics/economics.js'
@@ -96,19 +96,12 @@ export function listPositions(db: Database.Database) {
     const hours = loadHourly(db, r.pool_id, 24 * 45).filter(h => h.ts >= from && h.ts <= to)
     const P0 = hours[0]?.priceUsd
     const R = P0 ? (r.range_upper - r.range_lower) / (2 * P0) : 0.25
-    const est = hours.length ? simulateHourly(hours, r.deposit_usd, R) : []
+    const est = hours.length ? simulateHourly(hours, r.deposit_usd, R) : []   // 舊：固定投入（僅供 curve 以外的相容用途）
     const last = est[est.length - 1]
     const snaps = db.prepare('SELECT * FROM position_snapshots WHERE position_id=? ORDER BY date').all(r.id) as any[]
     const finalSnap = r.closed_at ? snaps[snaps.length - 1] : null
     const notes = (() => { try { return JSON.parse(r.notes ?? '') } catch { return null } })()
     const latest = snaps[snaps.length - 1]
-    const actual = latest && notes?.source === 'onchain' ? { date: latest.date, value_usd: latest.value_usd, fees_cum_usd: latest.fees_cum_usd, in_range: !!latest.in_range,
-      net_usd: latest.value_usd + latest.fees_cum_usd - r.deposit_usd, days: Math.max(1, Math.round((Date.parse(latest.date) - Date.parse(r.opened_at.slice(0, 10))) / 86400000) + 1), deposit_estimated: !!notes.deposit_estimated } : null
-    // 每日「實際 vs 模擬」：模擬取該日最後一小時的累積值
-    const simByDate = new Map<string, number>(); for (const e of est) simByDate.set(new Date(e.row.ts * 1000).toISOString().slice(0, 10), e.valueH + e.cumFees - r.deposit_usd)
-    const history = snaps.map(sn => ({ date: sn.date, actual: sn.value_usd + sn.fees_cum_usd - r.deposit_usd, sim: simByDate.get(sn.date) ?? null }))
-    // D61：持倉中的保本線。L 用鏈上真實流動性（notes.liquidity，加減倉後仍正確）；已賺的費 = 目前未領 + 日誌裡領過的；
-    // 費速 = 最近 7 天「已賺總額」的差（未領會在領取時歸零，所以要把領取日誌加回去），不足 7 天資料退回持有期平均並標示
     const journal = listJournal(db, r.id)
     // 已領的費：從快照偵測「未領費比前一天少」= 中間領過（手動領或加倉時自動結算）；同一段時間若日誌有 collect 的精確金額就用日誌，否則用快照差額（Codex review）
     const drops: { from: string; to: string; fromAt?: string | null; toAt?: string | null; amount: number }[] = []
@@ -116,11 +109,11 @@ export function listPositions(db: Database.Database) {
     for (let i = 1; i < snaps.length; i++) if (snaps[i - 1].fees_cum_usd > 0.5 && snaps[i].fees_cum_usd < snaps[i - 1].fees_cum_usd * 0.5) drops.push({ from: snaps[i - 1].date, to: snaps[i].date, fromAt: snaps[i - 1].taken_at, toAt: snaps[i].taken_at, amount: snaps[i - 1].fees_cum_usd })
     const tp = (iso: string) => taipeiDate(new Date(iso))   // 快照的 date 是台北日期；日誌與流動性變動的時間戳是 UTC ISO，統一換成台北日期再比（Codex review）
     const collects = journal.filter(j => j.kind === 'collect').map(j => ({ ts: String(j.ts), usd: Number((j.data ?? {}).usd ?? (j.data ?? {}).fees_collected_usd ?? 0) })).filter(c => c.usd > 0)
-    const events: { ts: string; date: string; usd: number }[] = []; const used = new Set<number>()
+    const events: { ts: string; date: string; usd: number; reinvested: number; reinvestTs?: string }[] = []; const used = new Set<number>()
     const inInterval = (c: { ts: string }, d: { from: string; to: string; fromAt?: string | null; toAt?: string | null }) =>
       d.fromAt && d.toAt ? (Date.parse(c.ts) > Date.parse(d.fromAt) && Date.parse(c.ts) <= Date.parse(d.toAt)) : (tp(c.ts) >= d.from && tp(c.ts) <= d.to)   // 舊快照沒時間戳：同日（含 from 當天）的日誌視為同一次領取，不再另加快照差額
-    for (const d of drops) { const k = collects.findIndex((c, idx) => !used.has(idx) && inInterval(c, d)); if (k >= 0) { used.add(k); events.push({ ts: collects[k].ts, date: tp(collects[k].ts), usd: collects[k].usd }) } else events.push({ ts: d.toAt ?? d.to + 'T00:00:00+08:00', date: d.to, usd: d.amount }) }
-    collects.forEach((c, idx) => { if (!used.has(idx)) events.push({ ts: c.ts, date: tp(c.ts), usd: c.usd }) })
+    for (const d of drops) { const k = collects.findIndex((c, idx) => !used.has(idx) && inInterval(c, d)); if (k >= 0) { used.add(k); events.push({ ts: collects[k].ts, date: tp(collects[k].ts), usd: collects[k].usd, reinvested: 0 }) } else events.push({ ts: d.toAt ?? d.to + 'T00:00:00+08:00', date: d.to, usd: d.amount, reinvested: 0 }) }
+    collects.forEach((c, idx) => { if (!used.has(idx)) events.push({ ts: c.ts, date: tp(c.ts), usd: c.usd, reinvested: 0 }) })
     // 「到某個快照為止」已領多少：有 taken_at 就用時間戳，舊快照退回台北日期
     const collectedBy = (sn: { date: string; taken_at?: string | null }) => events.filter(e => sn.taken_at ? Date.parse(e.ts) <= Date.parse(sn.taken_at) : e.date <= sn.date).reduce((a, e) => a + e.usd, 0)
     // 再投入的費：逐日（台北）判斷。該日 adjust 日誌有明寫 reinvested_usd 就用它；沒寫且該日流動性「增加」才把同日領取視為再投入；減倉日的領取是提走的
@@ -128,18 +121,44 @@ export function listPositions(db: Database.Database) {
     const dayBefore = (d: string) => taipeiDate(new Date(Date.parse(d + 'T12:00:00+08:00') - 86400000))   // 以台北時間算前一天
     // at 是每日同步「觀察到」變動的時間，實際加倉發生在前一次同步之後 → 觀察日與前一日都算（Codex review）；日誌明寫時以日誌為準
     const increaseDays = new Set(changes.filter(c => { try { return BigInt(c.to) > BigInt(c.from) } catch { return false } }).flatMap(c => [tp(c.at), dayBefore(tp(c.at))]))
-    const explicitByDay = new Map<string, number>()
-    for (const j of journal) if (j.kind === 'adjust' && j.data && j.data.reinvested_usd !== undefined) { const d = tp(String(j.ts)); explicitByDay.set(d, (explicitByDay.get(d) ?? 0) + Number(j.data.reinvested_usd)) }
-    // 每次加倉一個視窗（前一日, 觀察日）：視窗內有明寫就用明寫，否則用視窗內的領取；視窗重疊時事件只用一次（Codex review）
-    const usedDays = new Set<string>(); let reinvested = 0
+    const explicitByDay = new Map<string, number>(); const explicitList: { ts: string; date: string; usd: number }[] = []
+    for (const j of journal) if (j.kind === 'adjust' && j.data && j.data.reinvested_usd !== undefined) { const d = tp(String(j.ts)); explicitByDay.set(d, (explicitByDay.get(d) ?? 0) + Number(j.data.reinvested_usd)); explicitList.push({ ts: String(j.ts), date: d, usd: Number(j.data.reinvested_usd) }) }
+    // 每次加倉一個視窗（前一日, 觀察日）：視窗內有明寫就用明寫，否則視窗內的領取全數視為再投入；再投入逐事件記到 events[].reinvested（可部分），視窗重疊時事件只用一次（Codex review）
+    const usedDays = new Set<string>()
+    const markReinvest = (win: string[], amountOrNull: number | null, at: string) => {
+      const inWin = events.filter(e => win.includes(e.date) && e.usd - e.reinvested > 0)   // 允許對同一筆領取的「剩餘」再分配（Codex review）
+      let left = amountOrNull === null ? Infinity : amountOrNull
+      for (const e of inWin) { const r = Math.min(e.usd - e.reinvested, left); e.reinvested += r; e.reinvestTs = at; left -= r; if (left <= 0) break }
+      if (amountOrNull !== null && left > 0 && left !== Infinity) events.push({ ts: at, date: tp(at), usd: left, reinvested: left, reinvestTs: at })   // 明寫比觀察到的領取多：多的部分視為「有賺到且再投入」，領出為 0（Codex review）
+    }
     for (const c of changes) { let inc = false; try { inc = BigInt(c.to) > BigInt(c.from) } catch { }
       if (!inc) continue
       const win = [dayBefore(tp(c.at)), tp(c.at)].filter(d => !usedDays.has(d)); win.forEach(d => usedDays.add(d))
-      const ex = win.reduce((a, d) => a + (explicitByDay.get(d) ?? 0), 0)
-      reinvested += win.some(d => explicitByDay.has(d)) ? ex : events.filter(e => win.includes(e.date)).reduce((a, e) => a + e.usd, 0) }
-    for (const [d, v] of explicitByDay) if (!usedDays.has(d)) { reinvested += v; usedDays.add(d) }   // 日誌明寫但沒觀察到流動性變動（舊資料）
+      const exs = explicitList.filter(x => win.includes(x.date))
+      if (exs.length) for (const x of exs) markReinvest(win, x.usd, x.ts)   // 每筆明寫各自帶自己的時間戳（Codex review）
+      else markReinvest(win, null, c.at) }
+    for (const d of new Set(explicitList.map(x => x.date))) if (!usedDays.has(d)) { for (const x of explicitList.filter(x => x.date === d)) markReinvest([d], x.usd, x.ts); usedDays.add(d) }   // 同日多筆全部處理再標記
+    const reinvested = events.reduce((a, e) => a + e.reinvested, 0)
+    const reinvestedBy = (iso: string) => events.reduce((a, e) => a + (e.reinvested > 0 && effReinvestTs(e) <= Date.parse(iso) ? e.reinvested : 0), 0)
     void increaseDays
     const liqChangeDays = new Set(changes.map(c => tp(c.at)))
+    // D62：投入時間軸。adjust 日誌的 cash_added_usd 是帶正負號的外部本金淨流入（再投入的費不算）；某時點的投入 = 目前 deposit_usd − 該時點之後的流入
+    const flows = journal.filter(j => j.kind === 'adjust' && j.data && j.data.cash_added_usd !== undefined).map(j => ({ ts: String(j.ts), usd: Number(j.data.cash_added_usd) }))
+    const capitalAt = (iso: string) => r.deposit_usd - flows.filter(f => Date.parse(f.ts) > Date.parse(iso)).reduce((a, f) => a + f.usd, 0)
+    const effReinvestTs = (e: { ts: string; reinvestTs?: string }) => Math.max(Date.parse(e.ts), Date.parse(e.reinvestTs ?? e.ts))   // 再投入不可能早於領取；日誌時間誤填時以領取時間為準（Codex review）
+    const withdrawnBy = (iso: string) => events.reduce((a, e) => a + (Date.parse(e.ts) <= Date.parse(iso) ? e.usd : 0) - (e.reinvested > 0 && effReinvestTs(e) <= Date.parse(iso) ? e.reinvested : 0), 0)   // 領出在領取時生效、再投入在存回時扣
+    const snapIso = (sn: any) => sn.taken_at ?? (sn.date + 'T23:59:59+08:00')
+    const actual = latest && notes?.source === 'onchain' ? { date: latest.date, value_usd: latest.value_usd, fees_cum_usd: latest.fees_cum_usd, in_range: !!latest.in_range,
+      net_usd: latest.value_usd + latest.fees_cum_usd + withdrawnBy(snapIso(latest)) - capitalAt(snapIso(latest)), fees_withdrawn_usd: withdrawnBy(snapIso(latest)), fees_reinvested_usd: reinvestedBy(snapIso(latest)), capital_usd: capitalAt(snapIso(latest)), days: Math.max(1, Math.round((Date.parse(latest.date) - Date.parse(r.opened_at.slice(0, 10))) / 86400000) + 1), deposit_estimated: !!notes.deposit_estimated } : null
+    // 每日「實際 vs 模擬」：模擬取該日最後一小時的累積值
+    // D62：模擬承接同一部位、在加倉時點加流動性（不重新建倉）；實際淨損益對「當時的投入」算，領出的費加回
+    const D0 = capitalAt(r.opened_at); const capEvents = [...flows.map(f => ({ ts: Date.parse(f.ts) / 1000, usd: f.usd, kind: 'capital' as const })), ...events.filter(e => e.reinvested > 0).map(e => ({ ts: effReinvestTs(e) / 1000, usd: e.reinvested, kind: 'reinvest' as const }))]
+    const simCap = hours.length ? simulateWithCapital(hours, D0, r.range_lower, r.range_upper, capEvents) : []
+    const simByDate = new Map<string, number>(); for (const e of simCap) simByDate.set(taipeiDate(new Date(e.ts * 1000)), e.net)
+    const history = snaps.map(sn => ({ date: sn.date, actual: sn.value_usd + sn.fees_cum_usd + withdrawnBy(snapIso(sn)) - capitalAt(snapIso(sn)), sim: simByDate.get(sn.date) ?? null, capital: capitalAt(snapIso(sn)) }))
+    const capitalMarks = flows.map(f => ({ date: tp(f.ts), usd: f.usd }))
+    // D61：持倉中的保本線。L 用鏈上真實流動性（notes.liquidity，加減倉後仍正確）；已賺的費 = 目前未領 + 日誌裡領過的；
+    // 費速 = 最近 7 天「已賺總額」的差（未領會在領取時歸零，所以要把領取日誌加回去），不足 7 天資料退回持有期平均並標示
     let breakeven: any = null
     if (actual && !r.closed_at && notes?.liquidity && hours.length) {
       const Pnow = hours[hours.length - 1].priceUsd ?? null
@@ -157,8 +176,8 @@ export function listPositions(db: Database.Database) {
         breakeven = { lower: be.lower, upper: be.upper, paceUsdPerDay: pace, paceBasis, feesEarnedUsd: earnedNow, feesReinvestedUsd: reinvested, priceNow: Pnow, capitalChanged: liqChangeDays.size > 0 }   // 加減倉後 deposit_usd 需人工確認（Codex review）
       }
     }
-    return { ...r, notes_json: notes, journal, breakeven, est: last ? { value_usd: last.valueH, fees_cum_usd: last.cumFees, in_range: last.inRange, net_usd: last.valueH + last.cumFees - r.deposit_usd, price: last.row.priceUsd, hours: est.length } : null,
-      actual, history, curve: est.map(e => ({ ts: e.row.ts, net: e.valueH + e.cumFees - r.deposit_usd })), final: finalSnap ? { value_usd: finalSnap.value_usd, fees_cum_usd: finalSnap.fees_cum_usd } : null }
+    return { ...r, notes_json: notes, journal, breakeven, est: simCap.length ? (() => { const e = simCap[simCap.length - 1]; const P = hours[hours.length - 1].priceUsd; return { value_usd: e.valueH, fees_cum_usd: e.grossFees, fees_reinvested_usd: e.reinvested, capital_usd: e.capital, in_range: P >= r.range_lower && P <= r.range_upper, net_usd: e.net, price: P, hours: simCap.length } })() : null,
+      actual, history, capitalMarks, feesWithdrawnUsd: withdrawnBy(latest ? snapIso(latest) : new Date().toISOString()), feesReinvestedUsd: reinvested, curve: simCap.map(e => ({ ts: e.ts, net: e.net })), final: finalSnap ? { value_usd: finalSnap.value_usd, fees_cum_usd: finalSnap.fees_cum_usd } : null }
   })
 }
 
