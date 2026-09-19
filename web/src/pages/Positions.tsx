@@ -58,10 +58,15 @@ export default function Positions() {
           const cell = (v: number | null | undefined, cls = true) => v === null || v === undefined ? <td className="num">—</td> : <td className={'num ' + (cls ? (v >= 0 ? 'pos' : 'neg') : '')}>{(v >= 0 ? '+' : '−') + '$' + Math.abs(v).toFixed(2)}</td>
           return <>
             <table className="grid pnl" style={{ marginTop: 8 }}><thead><tr><th className="l">損益拆解</th><th>實際</th><th>模擬</th><th>差距</th></tr></thead><tbody>
-              <tr><td className="l">手續費<small>LP 真正賺的{p.actual.fees_withdrawn_usd > 0 && `，含領出 ${fmtUsd(p.actual.fees_withdrawn_usd, 2)}`}{p.actual.fees_reinvested_usd > 0 && `，含再投入 ${fmtUsd(p.actual.fees_reinvested_usd, 2)}`}</small></td>{cell(a.fee)}{cell(m?.fee)}{cell(m ? a.fee - m.fee : null)}</tr>
+              <tr><td className="l">手續費合計<small>LP 真正賺的</small></td>{cell(a.fee)}{cell(m?.fee)}{cell(m ? a.fee - m.fee : null)}</tr>
+              <tr className="sub"><td className="l">未領<small>還在部位裡</small></td>{cell(p.actual.fees_cum_usd, false)}<td className="num muted">—</td><td className="num muted">—</td></tr>
+              <tr className="sub"><td className="l">已領出<small>到錢包</small></td>{cell(p.actual.fees_withdrawn_usd, false)}<td className="num muted">—</td><td className="num muted">—</td></tr>
+              <tr className="sub"><td className="l">已再投入<small>加倉時存回部位</small></td>{cell(p.actual.fees_reinvested_usd, false)}<td className="num muted">—</td><td className="num muted">—</td></tr>
               <tr><td className="l">價格損益<small>持有股票漲跌 + IL</small></td>{cell(a.px)}{cell(m?.px)}{cell(m ? a.px - m.px : null)}</tr>
               <tr><td className="l"><b>淨損益</b></td>{cell(a.net)}{cell(m?.net)}{cell(m ? a.net - m.net : null)}</tr>
             </tbody></table>
+            <div className="muted num" style={{ fontSize: 13, marginTop: 6 }}>投入：{p.opened_at.slice(5, 10).replace('-', '/')} 開倉 {fmtUsd(p.deposit_usd - (p.capitalMarks ?? []).reduce((s: number, x: { usd: number }) => s + x.usd, 0), 2)}
+              {(p.capitalMarks ?? []).map((x: { date: string; usd: number }) => <span key={x.date}> → {x.date.slice(5).replace('-', '/')} {x.usd >= 0 ? '加倉 +' : '減倉 −'}{fmtUsd(Math.abs(x.usd), 2)}</span>)} → 目前 {fmtUsd(p.deposit_usd, 2)}</div>   {/* 用目前 deposit_usd，快照晚於最近一次調整時才不會落後（Codex review） */}
             {p.breakeven && (() => { const b = p.breakeven; const lo = b.lower
               return <div className="muted" style={{ fontSize: 13, marginTop: 6, padding: '6px 8px', border: '1px solid #262b34', borderRadius: 6 }} title="跌到區間下緣時會全變股票。要補的錢 = 投入 − 那時的市值 + 出場換回 USDG 的磨損 + gas − 已賺的手續費（含領過的）。天數用最近 7 天的費速折算；跌穿後原區間停止收費，這只是「以目前速度」的換算。">
                 <b>保本線</b> · 跌到 {fmtNum(lo.bound, 2)} 時市值 {fmtUsd(lo.valueAtBound, 0)}（帳面 −{fmtUsd(lo.paperLoss, 0)}）· 已賺費 {fmtUsd(b.feesEarnedUsd, 2)}{b.feesReinvestedUsd > 0 && <span>（含再投入 {fmtUsd(b.feesReinvestedUsd, 2)}）</span>} · {lo.covered ? <span className="pos">已被手續費蓋過</span> : <>還差 <b>{fmtUsd(lo.toCoverUsd, 2)}</b>（含出場成本 {fmtUsd(lo.exitSwapUsd + lo.gasUsd, 2)}）· 費速 {fmtUsd(b.paceUsdPerDay, 2)}/天（{b.paceBasis}）→ 約需 <b>{lo.days === null ? '—' : lo.days.toFixed(1) + ' 天'}</b></>}{b.capitalChanged && <span className="neg"> · 流動性變動過，請確認投入基準已更新</span>}

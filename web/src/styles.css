@@ -123,3 +123,7 @@ table.compact.tight td:last-child .sub { white-space: normal }
 .kv.help { grid-template-columns: max-content 1fr; gap: 6px 16px; font-size: 15px }
 .kv.help dt { color: var(--amber); font-family: var(--mono); white-space: nowrap }
 table.grid th[title] { cursor: help }
+
+/* D62：損益拆解的子列（手續費去向） */
+.pnl tr.sub td { font-size: 0.92em; color: #9aa3ad; padding-top: 2px; padding-bottom: 2px }
+.pnl tr.sub td.l { padding-left: 1.6em }
