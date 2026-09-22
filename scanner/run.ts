@@ -4,7 +4,7 @@ import { openDb, getMeta, setMeta } from '../db/index.js'
 import { ADDR, CHAIN, loadScoring } from '../config/chain.js'
 import { ApiUsage } from './sources/usage.js'
 import { makeRpc, errText } from './sources/rpc.js'
-import { fetchAssets, fetchCorporateActions, fetchPrice, type RhQuote } from './sources/robinhood.js'
+import { fetchAssets, fetchCorporateActions, parseAsset, type RhAsset, fetchPrice, type RhQuote } from './sources/robinhood.js'
 import { fetchTokenPairs } from './sources/dexscreener.js'
 import { discoverUsdgPools, fetchSwaps, readV4ProtocolFee } from './sources/uniswapV4.js'
 import { discoverV3UsdgPools, fetchV3Swaps, fetchV3LiquidityEvents, readV3ProtocolFee } from './sources/uniswapV3.js'
@@ -35,14 +35,26 @@ export async function runDaily(opts: { dbPath?: string; now?: Date; simOnly?: bo
   const now = opts.now ?? new Date(); const date = taipeiDate(now); const usage = new ApiUsage()
   const db = openDb(opts.dbPath ?? 'db/lp.sqlite'); const scoring = loadScoring()
   const runId = Number(db.prepare(`INSERT INTO scan_runs(started_at) VALUES (?)`).run(now.toISOString()).lastInsertRowid)
-  let poolsScanned = 0, swapPools = 0, swapFailed = 0, discoveryFailed = false
+  let poolsScanned = 0, swapPools = 0, swapFailed = 0, discoveryFailed = false, whitelistStale = false, caStale = false
   try {
     if (!opts.simOnly) {
     const rpc = makeRpc({ usage })
     // 1. 白名單與公司行動
-    const assets = await fetchAssets({ usage }); upsertTokens(db, assets, now.toISOString()); log(`assets ${assets.length}`)
+    // D63：9/22 Robinhood /assets 卡 65 秒（4 次 × 15 秒）後整個掃描中止。起步呼叫給 7 次、基底 2 秒（約 4 分鐘）；
+    // 還是失敗就退回 tokens.raw 的昨日白名單並標記 whitelist_stale，不讓整天沒資料。
+    let assets: RhAsset[]
+    try { assets = await fetchAssets({ usage, retries: 7, baseDelayMs: 2000 }); upsertTokens(db, assets, now.toISOString()); setMeta(db, 'whitelist_last_ok', JSON.stringify(assets.map(a => a.address))); log(`assets ${assets.length}`) }
+    catch (e) {
+      // 只還原上一次成功抓到的名單（tokens 表是歷史累積，會把已下市的放回來；Codex review）
+      const lastOk = new Set<string>(JSON.parse(getMeta(db, 'whitelist_last_ok') ?? '[]'))
+      if (lastOk.size === 0) throw e   // 沒有已知的成功名單就不退回（Codex review）
+      assets = (db.prepare(`SELECT address, raw FROM tokens WHERE kind='stock' AND raw IS NOT NULL`).all() as { address: string; raw: string }[]).filter(r => lastOk.has(r.address)).map(r => { try { return parseAsset(JSON.parse(r.raw)) } catch { return null } }).filter((x): x is RhAsset => x !== null)
+      if (!assets.length) throw e
+      whitelistStale = true; log(`assets FAILED (${errText(e).split('\n')[0].slice(0, 80)}) → 用資料庫快取 ${assets.length} 檔（可能漏掉今天新上的股票）`)
+    }
     const stockByAddr = new Map(assets.map(a => [a.address, a])); const stockSet = new Set(stockByAddr.keys())
-    const cas = await fetchCorporateActions({ usage })
+    let cas: Awaited<ReturnType<typeof fetchCorporateActions>> = []
+    try { cas = await fetchCorporateActions({ usage, retries: 7, baseDelayMs: 2000 }) } catch (e) { caStale = true; log(`corporate actions FAILED (${errText(e).split('\n')[0].slice(0, 80)}) → 沿用資料庫既有列（今天新公告的公司行動不會被排除）`) }
     const caSt = db.prepare(`INSERT OR REPLACE INTO corporate_actions(id,token,type,status,effective_at,pending_multiplier,raw) VALUES (?,?,?,?,?,?,?)`)
     for (const c of cas) caSt.run(c.id, c.address, c.type, c.status, c.effectiveAt, stockByAddr.get(c.address)?.pendingMultiplier ?? '', JSON.stringify(c.raw))
     log(`corporate actions ${cas.length}`)
@@ -58,7 +70,8 @@ export async function runDaily(opts: { dbPath?: string; now?: Date; simOnly?: bo
       for (const p of found) if (isStockUsdgPool(p, stockSet) && !blockTs.has(p.createdBlock.toString()))
         blockTs.set(p.createdBlock.toString(), new Date(Number((await rpc.call(() => rpc.client.getBlock({ blockNumber: p.createdBlock }))).timestamp) * 1000).toISOString())
       log(`discovery ${from}→${latest}: ${found.length} usdg pools (v3 ${found.filter(f => f.protocol === 'v3').length}), ${upsertPools(db, found, stockSet, blockTs)} new stock pools`)
-      setMeta(db, 'last_discovery_block', latest.toString())
+      if (!whitelistStale) setMeta(db, 'last_discovery_block', latest.toString())   // 白名單過期時不推進游標：新上市股票的池明天用新白名單補掃（Codex review）
+      else log('whitelist stale → discovery cursor kept for re-scan tomorrow')
     } catch (e) { discoveryFailed = true; log(`discovery FAILED (${String((e as Error).message ?? e).slice(0, 80)}); continuing with known pools, cursor kept at ${from - 1n}`) }
     // 3. TVL（DexScreener）與參考價（Robinhood）
     { const n = backfillHookInfo(db); if (n) log(`hook info backfilled for ${n} pools`) }
@@ -203,9 +216,10 @@ export async function runDaily(opts: { dbPath?: string; now?: Date; simOnly?: bo
       top: cands.slice(0, 5).map(r => { const sim = r.sim ? JSON.parse(r.sim) as SimJson : null
         return { label: label(r), feePct: r.fee_ppm !== null ? (r.fee_ppm / 1e4).toFixed(2) + '%' : r.fee_ppm_observed !== null ? '~' + (r.fee_ppm_observed / 1e4).toFixed(2) + '%' : '動態', netApr: getSimField(sim, scoring.sort_key, scoring.rank_field ?? 'net_apr_trimmed'), inRangePct: getSimField(sim, scoring.sort_key, 'in_range_pct'), traderCount: r.trader_count } }), changes, positions: formatPositions(listPositions(db)), dashboardUrl: process.env.DASHBOARD_URL })
     // D58：資料完整性。swap 抓取失敗比例 > 20%、一個都沒抓、或發現階段失敗 → 摘要開頭標警告，scan_runs.degraded=1（watchdog 會再確認）
-    const failPct = swapPools ? swapFailed / swapPools : 0; const degraded = opts.simOnly ? null : (discoveryFailed || swapPools === 0 || failPct > 0.2)   // --sim-only 不抓 swap：狀態未知記 NULL，不覆蓋成正常（Codex review）
+    const failPct = swapPools ? swapFailed / swapPools : 0; const degraded = opts.simOnly ? null : (discoveryFailed || swapPools === 0 || failPct > 0.2 || whitelistStale || caStale)   // 上游快取也算不完整，watchdog 才看得到（Codex review）   // --sim-only 不抓 swap：狀態未知記 NULL，不覆蓋成正常（Codex review）
+    const staleNote = [whitelistStale ? '白名單用昨日快取（Robinhood /assets 抓不到，新上市股票可能漏掉）' : '', caStale ? '公司行動用昨日快取（新公告不會被排除）' : ''].filter(Boolean).map(x => '⚠️ ' + x).join('\n')
     const warn = degraded ? `⚠️ 今日資料不完整：swap 抓取失敗 ${swapFailed}/${swapPools}（${(failPct * 100).toFixed(0)}%）${discoveryFailed ? '、池子發現失敗' : ''}。排名可能失真，建議補跑：cd ~/AI/lp_scanner && RPC_CONCURRENCY=2 RPC_GAP_MS=750 pnpm scan\n\n` : swapFailed ? `（swap 抓取失敗 ${swapFailed}/${swapPools}）\n` : ''
-    const fullText = warn + text
+    const fullText = warn + (staleNote ? staleNote + '\n' : '') + text
     console.log('\n' + fullText + '\n')
     const sent = await sendTelegram(fullText, { token: process.env.TELEGRAM_BOT_TOKEN, chatId: process.env.TELEGRAM_CHAT_ID, topicId: process.env.TELEGRAM_TOPIC_ID })
     pruneHourly(db)

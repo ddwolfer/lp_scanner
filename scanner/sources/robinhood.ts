@@ -4,7 +4,7 @@ import { fetchJson, HttpError } from './http.js'
 import type { ApiUsage } from './usage.js'
 import { CHAIN } from '../../config/chain.js'
 const BASE = 'https://api.robinhood.com/rhj'
-export interface RhCtx { usage: ApiUsage; fetchImpl?: typeof fetch }
+export interface RhCtx { usage: ApiUsage; fetchImpl?: typeof fetch; retries?: number; baseDelayMs?: number }
 const Cap = z.object({ whole: z.string(), fractional: z.string() })
 const AssetSchema = z.object({
   id: z.string(), tokenSymbol: z.string(), tokenName: z.string(),
@@ -14,18 +14,18 @@ const AssetSchema = z.object({
   tokenDecimals: z.number(),
 }).passthrough()
 export interface RhAsset { id: string; tokenSymbol: string; tokenName: string; address: string; currentMultiplier: string; pendingMultiplier: string; status: string; allDayTradable: boolean; tokenDecimals: number; raw: unknown }
+/** 把 /assets 的一筆 raw 解析成 RhAsset；不在本鏈的回 null。tokens.raw 快取也用它還原（D63） */
+export function parseAsset(raw: unknown): RhAsset | null {
+  const a = AssetSchema.parse(raw)
+  const dep = a.deployments.find(d => d.chainId === CHAIN.id); if (!dep) return null
+  return { id: a.id, tokenSymbol: a.tokenSymbol, tokenName: a.tokenName, address: dep.contractAddress.toLowerCase(),
+    currentMultiplier: a.currentMultiplier, pendingMultiplier: a.pendingMultiplier, status: a.status,
+    allDayTradable: a.tradingCapabilities.overnight?.whole === 'TRADING_STATUS_TRADABLE',   // DECISIONS 11.2
+    tokenDecimals: a.tokenDecimals, raw }
+}
 export async function fetchAssets(ctx: RhCtx): Promise<RhAsset[]> {
-  const body = await fetchJson<{ assets: unknown[] }>(`${BASE}/assets`, { source: 'robinhood', usage: ctx.usage, fetchImpl: ctx.fetchImpl })
-  const out: RhAsset[] = []
-  for (const raw of body.assets) {
-    const a = AssetSchema.parse(raw)
-    const dep = a.deployments.find(d => d.chainId === CHAIN.id); if (!dep) continue
-    out.push({ id: a.id, tokenSymbol: a.tokenSymbol, tokenName: a.tokenName, address: dep.contractAddress.toLowerCase(),
-      currentMultiplier: a.currentMultiplier, pendingMultiplier: a.pendingMultiplier, status: a.status,
-      allDayTradable: a.tradingCapabilities.overnight?.whole === 'TRADING_STATUS_TRADABLE',   // DECISIONS 11.2
-      tokenDecimals: a.tokenDecimals, raw })
-  }
-  return out
+  const body = await fetchJson<{ assets: unknown[] }>(`${BASE}/assets`, { source: 'robinhood', usage: ctx.usage, fetchImpl: ctx.fetchImpl, retries: ctx.retries, baseDelayMs: ctx.baseDelayMs })
+  return body.assets.map(parseAsset).filter((x): x is RhAsset => x !== null)
 }
 export interface RhQuote { symbol: string; bid: number; ask: number; mid: number; spreadPct: number; isTradingHalt: boolean; generatedAt: string }
 export async function fetchPrice(ctx: RhCtx, symbol: string): Promise<RhQuote | null> {
@@ -39,7 +39,7 @@ export async function fetchPrice(ctx: RhCtx, symbol: string): Promise<RhQuote | 
 }
 export interface RhCorpAction { id: string; tokenSymbol: string; address: string; type: string; status: string; effectiveAt: string; raw: unknown }
 export async function fetchCorporateActions(ctx: RhCtx): Promise<RhCorpAction[]> {
-  const body = await fetchJson<{ corpActions: any[] }>(`${BASE}/corporate-actions`, { source: 'robinhood', usage: ctx.usage, fetchImpl: ctx.fetchImpl })
+  const body = await fetchJson<{ corpActions: any[] }>(`${BASE}/corporate-actions`, { source: 'robinhood', usage: ctx.usage, fetchImpl: ctx.fetchImpl, retries: ctx.retries, baseDelayMs: ctx.baseDelayMs })
   return (body.corpActions ?? []).map(c => {
     const d = c.processDate ?? {}; const pad = (n: number) => String(n).padStart(2, '0')
     const dep = (c.deployments ?? []).find((x: any) => x.chainId === CHAIN.id)
