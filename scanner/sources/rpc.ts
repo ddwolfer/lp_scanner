@@ -39,6 +39,8 @@ export const isRetryable = (e: unknown, text = errText(e)) => {
   if (chain(e).some(x => /^(HttpRequestError|TimeoutError|SocketClosedError)$/.test(String(x?.name ?? '')))) return true
   return /429|Too Many Requests|compute units|exceeded|timed? ?out|ECONNRESET|ECONNREFUSED|EPIPE|ETIMEDOUT|fetch failed|socket hang up|other side closed|terminated|network socket disconnected|Bad Gateway|Service Unavailable|Gateway Time-?out|Internal Server Error/i.test(text)
 }
+/** 端點暫時封鎖：公用 RPC 的 Cloudflare 會在掃描開始幾分鐘後連續回 403 約 2–3 分鐘再自動恢復（9/18、9/22，D64）。不算 isRetryable，走獨立的共用冷卻 */
+export const isBlocked = (e: unknown) => chain(e).some(x => Number(x?.status) === 403)
 export const isTooManyLogs = (e: unknown) => /exceeds limit|Missing or invalid parameters|query returned more than|response size/i.test(errText(e))
 export interface Rpc {
   client: PublicClient
@@ -46,7 +48,8 @@ export interface Rpc {
   getBlockNumber(): Promise<bigint>
   getLogsChunked(p: { address: `0x${string}`; event: AbiEvent; args?: Record<string, unknown> }, from: bigint, to: bigint, chunk?: bigint): Promise<Log[]>
 }
-export function makeRpc(o: { usage: ApiUsage; url?: string; concurrency?: number; minGapMs?: number; source?: string }): Rpc {
+export function makeRpc(o: { usage: ApiUsage; url?: string; concurrency?: number; minGapMs?: number; source?: string; blockCoolMs?: number; blockMaxMs?: number; sleepFn?: (ms: number) => Promise<void>; now?: () => number }): Rpc {
+  const sleepMs = o.sleepFn ?? sleep; const now = o.now ?? Date.now
   const url = o.url ?? CHAIN.publicRpc
   const source = o.source ?? 'rpc'
   const client = createPublicClient({
@@ -56,19 +59,36 @@ export function makeRpc(o: { usage: ApiUsage; url?: string; concurrency?: number
   // D47：公用 RPC 對 getLogs 的限流變嚴時，可用環境變數降速（RPC_CONCURRENCY、RPC_GAP_MS）
   const lim = new Limiter(o.concurrency ?? Number(process.env.RPC_CONCURRENCY || 2))
   const minGapMs = o.minGapMs ?? Number(process.env.RPC_GAP_MS || 250); let lastStart = 0
+  // D64：403 是整個端點被封，不是單一請求的問題。所有呼叫共用一個冷卻時間點（blockedUntil），封鎖中的請求全部等到冷卻結束才發，
+  // 冷卻後第一個請求等於探測；再 403 就再延長。連續封鎖超過 blockMaxMs 才放棄（該池標 swap_fetch_failed，走既有的降級流程）。
+  // 403 不共用 attempt，避免先前的 429/逾時把預算吃掉（Codex plan review）
+  const blockCoolMs = o.blockCoolMs ?? 30_000, blockMaxMs = o.blockMaxMs ?? 6 * 60_000; let blockedUntil = 0, blockStart = 0
   async function call<T>(fn: () => Promise<T>): Promise<T> {
     return lim.run(async () => {
-      for (let attempt = 0; ; attempt++) {
-        const wait = lastStart + minGapMs - Date.now(); if (wait > 0) await sleep(wait); lastStart = Date.now()
+      for (let attempt = 0; ; ) {
+        // 等冷卻與最小間隔後都要再看一次 blockedUntil：睡眠期間另一個併發請求可能又收到 403 把冷卻延長（Codex code review）
+        for (;;) {
+          const cool = blockedUntil - now(); if (cool > 0) { await sleepMs(cool); continue }
+          const wait = lastStart + minGapMs - now(); if (wait > 0) { await sleepMs(wait); continue }
+          break
+        }
+        lastStart = now()
         o.usage.inc(source)
-        try { return await fn() }
+        try { const r = await fn(); blockStart = 0; return r }
         catch (e) {
+          if (isBlocked(e)) {
+            if (!blockStart) blockStart = now()
+            blockedUntil = Math.max(blockedUntil, now() + blockCoolMs + Math.random() * 5000)   // 先記冷卻再決定放棄：後面的呼叫也要等
+            if (now() - blockStart >= blockMaxMs) throw e
+            if (process.env.RPC_DEBUG) console.error(`[rpc] 403 blocked, cooling ${Math.round((blockedUntil - now()) / 1000)}s`)
+            continue   // 不動 attempt：403 有自己的時間上限（Codex code review）
+          }
           // viem 把 HTTP 狀態放在 details / cause，不在 message（9/11：message 只有「RPC Request failed.」，429 沒被重試，961 池抓不到 swap）
           const msg = errText(e)
           if (process.env.RPC_DEBUG) console.error(`[rpc] attempt ${attempt} err: ${msg.split('\n')[0].slice(0, 120)}`)
           if (isTooManyLogs(msg)) throw e   // D47：>10k logs 不是限流，立刻交給 getLogsChunked 對半切，不進退避
           // public RPC 對 getLogs 有突發限流與 Cloudflare 錯誤頁（D59）；最多 12 次退避，上限 60 秒（合計約 8 分鐘）
-          if (attempt < 12 && isRetryable(e, msg)) { await sleep(Math.min(60_000, 1000 * 2 ** attempt) + Math.random() * 500); continue }
+          if (attempt < 12 && isRetryable(e, msg)) { await sleepMs(Math.min(60_000, 1000 * 2 ** attempt) + Math.random() * 500); attempt++; continue }
           throw e
         }
       }
