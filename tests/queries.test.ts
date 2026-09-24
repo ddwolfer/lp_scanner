@@ -1,6 +1,6 @@
 import { it, expect } from 'vitest'
 import { openDb } from '../db/index.js'
-import { getDates, getOverview, getPool, createPosition, closePosition, listPositions, addJournal, listJournal, exportPositions, weekendWindow } from '../server/queries.js'
+import { getDates, getOverview, getPool, createPosition, closePosition, listPositions, addJournal, listJournal, exportPositions, weekendWindow, poolSeries } from '../server/queries.js'
 import { readFileSync, rmSync } from 'node:fs'
 import { writeSnapshot, writeHourly, updateSim } from '../scanner/steps.js'
 function seed() {
@@ -90,4 +90,28 @@ it('D61 保本線：領費由快照歸零自動偵測，日誌有精確值就用
   // 沒有日誌時退回快照差額
   db.prepare('DELETE FROM position_journal').run()
   expect(listPositions(db).find(x => x.id === id)!.breakeven.feesEarnedUsd).toBeCloseTo(20.0 + 10.96, 6)   // 最新快照已是 9/19 的 20.0
+})
+
+it('D65：費率低於下限而被排除的池，頭寸模擬與換池提示仍可用；沒抓 swap 的日子不算費率 0', () => {
+  const db = seed()
+  db.prepare(`INSERT INTO pools(pool_id,protocol,token0,token1,fee_ppm,hooks,stock_is_token0,created_at,hook_kind) VALUES ('0x3','v3','0xsofi','0xusdg',500,'0x0',1,'2026-08-01','none')`).run()
+  db.prepare(`UPDATE pools SET hook_kind='none'`).run()   // seed 的 hooks='0x0' 不是零地址，沒有 hook_kind 會被當成流動性 hook
+  const base = { is_weekday: 1, tvl_usd: 100000, volume_24h_usd: 0, fees_24h_usd: 0, price_usd: 10, price_ref_usd: 10, price_dev_pct: 0, swap_count: 0, age_days: 30, vol7_avg_usd: 0, vol7_cv: 0, raw_apr: 0, excluded: 1 }
+  const dates = ['2026-09-01', '2026-09-02', '2026-09-03', '2026-09-04']
+  // 前兩天沒抓（舊快照沒旗標 / 新快照有旗標），後兩天抓到 $230/日（0.23%/日）；持有的 0x1 池同期 0.03%/日
+  writeSnapshot(db, { ...base, pool_id: '0x3', date: dates[0], flags: ['fee_out_of_range'] })
+  writeSnapshot(db, { ...base, pool_id: '0x3', date: dates[1], flags: ['fee_out_of_range', 'swap_not_fetched'] })
+  for (const d of dates.slice(2)) writeSnapshot(db, { ...base, pool_id: '0x3', date: d, flags: ['fee_out_of_range'], fees_24h_usd: 230, volume_24h_usd: 500000, swap_count: 900 })
+  writeSnapshot(db, { ...base, pool_id: '0x3', date: '2026-09-30', flags: ['fee_out_of_range'] })   // 旗標上線後「抓了但沒成交」→ 有效的零收益日
+  writeSnapshot(db, { ...base, pool_id: '0x3', date: '2026-10-01', flags: ['fee_out_of_range', 'protocol_fee_unknown'], fees_24h_usd: 300, swap_count: 10 })   // 總費口徑，不能比
+  for (const d of dates) writeSnapshot(db, { ...base, pool_id: '0x1', date: d, flags: [], excluded: 0, tvl_usd: 10000, fees_24h_usd: 3, swap_count: 5 })
+  writeHourly(db, '0x3', [0, 1, 2].map(i => ({ ts: 1_700_000_000 + 3600 * i, priceUsd: 10, volumeUsd: 100, feesUsd: 1, liquidity: '1', swapCount: 1 })))
+  createPosition(db, { pool_id: '0x3', label: 'lowfee', range_lower: 7.5, range_upper: 12.5, deposit_usd: 1000, opened_at: new Date(1_700_000_000 * 1000).toISOString() })
+  const [p] = listPositions(db)
+  expect(p.est!.fees_cum_usd).toBeGreaterThan(0)                       // 排除池的 hourly 照樣進頭寸模擬
+  const s = poolSeries(db, '0x3', 7, 5000)
+  expect(s.held!.days.map(d => d.date)).toEqual(['2026-09-30', '2026-10-01'])   // 只取最新快照日往回 7 個日曆日，不是最近 7 筆
+  expect(s.held!.days.map(d => d.ok)).toEqual([true, false])
+  expect(poolSeries(db, '0x3', 40, 5000).held!.days.map(d => d.ok)).toEqual([false, false, true, true, true, false])
+  expect(p.switchHint!.validDays).toBe(1); expect(p.switchHint!.verdict).toBe('no_data')   // 7 個日曆日內自己只有 1 個有效日
 })

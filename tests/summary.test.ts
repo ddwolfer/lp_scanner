@@ -27,7 +27,7 @@ it('有 topicId 時帶 message_thread_id', async () => {
   await sendTelegram('hi', { token: 'T', chatId: 'C', topicId: '42' }, f as any)
   expect(JSON.parse(f.mock.calls[0][1].body)).toMatchObject({ chat_id: 'C', message_thread_id: 42 })
 })
-import { formatPositions } from '../scanner/run.js'
+import { formatPositions, shouldFetchSwaps } from '../scanner/run.js'
 it('formatPositions 只列未關閉頭寸', () => {
   const rows = [
     { symbol: 'SOFI', label: '#1', closed_at: null, est: { net_usd: 18.4, hours: 168, in_range: true } },
@@ -36,4 +36,20 @@ it('formatPositions 只列未關閉頭寸', () => {
     { symbol: 'AMD', label: '#3', closed_at: null, est: null },
   ] as any
   expect(formatPositions(rows)).toEqual(['SOFI/USDG #1  +$18.40 (7d, 估算)  在區間 ✓', 'MSTR/USDG #2b (1d)  手續費 +$3.87 + 價差 +$10.26 = +$14.13（模擬 +$11.34）  在區間 ✓', 'AMD/USDG #3  無小時資料'])
+})
+
+it('formatPositions 有換池提示時加一行縮排（D65）', () => {
+  const rows = [{ symbol: 'SPCX', label: '#7838', closed_at: null, deposit_usd: 1953.8, actual: { fees_cum_usd: 12.1, value_usd: 1949.6, net_usd: 7.9, days: 3, in_range: true }, est: null,
+    switchHint: { verdict: 'consider', heldRate7: 0.0008, validDays: 7, altsPending: 0, best: { poolId: 'x', label: 'v3 0.05%', rate7: 0.0023 }, daysAbove: 3, extraPerDay: 3, switchCostUsd: 13.3, recoverDays: 4.43 } }] as any
+  expect(formatPositions(rows)).toEqual(['SPCX/USDG #7838 (3d)  手續費 +$12.10 + 價差 −$4.20 = +$7.90（模擬 —）  在區間 ✓', '  ⚖️ 費/TVL 7日 0.08%/日 vs 最佳替代 v3 0.05% 0.23%/日 ×3天 → 考慮換（粗估多賺 $3.00/日，換池成本 $13.30，4.4 天回本）'])
+})
+it('shouldFetchSwaps：低費率池只為持有/觀察中的股票抓（D65）', () => {
+  const base = { hookKind: 'none' as const, feeOk: false, lowFee: true, tvl: 20000, minTvl: 1000, lowFeeMinTvl: 5000 }
+  expect(shouldFetchSwaps({ ...base, watched: true })).toBe(true)
+  expect(shouldFetchSwaps({ ...base, watched: false })).toBe(false)
+  expect(shouldFetchSwaps({ ...base, watched: true, tvl: 3000 })).toBe(false)              // 低費率池 TVL 要到候選門檻
+  expect(shouldFetchSwaps({ ...base, watched: true, hookKind: 'liquidity' })).toBe(false)  // 流動性 hook 永遠不抓
+  expect(shouldFetchSwaps({ ...base, watched: false, feeOk: true, lowFee: false, tvl: 1500 })).toBe(true)   // 一般池照 D16
+  expect(shouldFetchSwaps({ ...base, watched: true, feeOk: false, lowFee: false })).toBe(false)             // 費率過高的池不抓
+  expect(shouldFetchSwaps({ ...base, watched: true, tvl: null })).toBe(false)
 })

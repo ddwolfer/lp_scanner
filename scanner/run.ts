@@ -26,6 +26,7 @@ import { listPositions } from '../server/queries.js'
 import { lastKnownTvl, backfillHookInfo } from './steps.js'
 import { median } from './metrics/hooks.js'
 import { runPositionsStage } from './positionsStage.js'
+import { formatSwitchHint } from './metrics/poolSwitch.js'
 
 const WEEKDAY_ZH = ['日', '一', '二', '三', '四', '五', '六']
 const STOCKISH = /^[A-Z]{1,5}$/
@@ -102,6 +103,9 @@ export async function runDaily(opts: { dbPath?: string; now?: Date; simOnly?: bo
         savePf.run(pf.ppm0, pf.ppm1, Number(head), pool.pool_id); pool.pf_ppm0 = pf.ppm0; pool.pf_ppm1 = pf.ppm1; return pf
       } catch { return pool.pf_ppm0 !== null ? { ppm0: pool.pf_ppm0 as number, ppm1: pool.pf_ppm1 as number } : null }   // 讀不到就沿用舊值，再不行回 null（會標記未知）
     }
+    // D65：有未關閉頭寸的股票 + 設定的觀察名單 → 這些股票的低費率池也抓 swap
+    const heldStocks = (db.prepare(`SELECT DISTINCT CASE WHEN p.stock_is_token0=1 THEN p.token0 ELSE p.token1 END a FROM positions ps JOIN pools p ON p.pool_id=ps.pool_id WHERE ps.closed_at IS NULL`).all() as { a: string }[]).map(r => r.a)
+    const watchedStocks = new Set<string>([...heldStocks, ...[...stockByAddr].filter(([, v]) => scoring.scan.watch_symbols.includes(v.tokenSymbol)).map(([a]) => a)])
     for (const p of pools) {
       poolsScanned++
       const stockAddr: string = p.stock_is_token0 ? p.token0 : p.token1; const asset = stockByAddr.get(stockAddr)
@@ -111,7 +115,8 @@ export async function runDaily(opts: { dbPath?: string; now?: Date; simOnly?: bo
       let tvl = tvlByPool.get(p.pool_id) ?? null; let tvlStale = false
       if (tvl === null) { const prevTvl = lastKnownTvl(db, p.pool_id, date); if (prevTvl !== null) { tvl = prevTvl; tvlStale = true } }   // DECISIONS D31：來源缺漏時沿用前值
       // DECISIONS D16：只對無 hooks、費率合理、DexScreener TVL ≥ 門檻的池拉 Swap（其餘必被硬排除）
-      const worth = hookKind !== 'liquidity' && feeOk && tvl !== null && tvl >= scoring.scan.swap_fetch_min_tvl_usd
+      // D65：費率低於下限的靜態池，若該股票有未關閉頭寸或在 watch_symbols，也抓（供換池比較；仍排除、不進排名）
+      const worth = shouldFetchSwaps({ hookKind, feeOk, lowFee: p.fee_ppm !== null && p.fee_ppm < scoring.exclusions.fee_ppm_min, watched: watchedStocks.has(stockAddr), tvl, minTvl: scoring.scan.swap_fetch_min_tvl_usd, lowFeeMinTvl: scoring.exclusions.min_tvl_usd })
       if (worth) swapPools++
       let hourly: ReturnType<typeof aggregateHourly> = []; let swapFetchFailed = false; let feeObserved: number | null = null
       if (worth) {
@@ -140,6 +145,7 @@ export async function runDaily(opts: { dbPath?: string; now?: Date; simOnly?: bo
         rhStatus: asset?.status ?? null, wash: null, quoteKind: 'usdg' }, scoring.exclusions)
       if (v7.shortHistory) flags.push('short_history')
       if (swapFetchFailed) flags.push('swap_fetch_failed')
+      if (!worth) flags.push('swap_not_fetched')   // D65：明確標「今天沒抓」，讓 swap_count=0 能分辨「沒抓」和「抓了但沒成交」
       if (tvlStale) flags.push('tvl_stale')
       if (refWide) flags.push('ref_wide_spread')
       const pfUnknown = hourly.some(h => h.protocolFeeUnknown)
@@ -148,7 +154,7 @@ export async function runDaily(opts: { dbPath?: string; now?: Date; simOnly?: bo
         price_ref_usd: refWide ? null : quote?.mid ?? null, price_dev_pct: lastPrice !== null && !refWide ? priceDevPct(lastPrice, quote?.mid ?? null, Number(asset?.currentMultiplier ?? 1)) : null,
         swap_count: swaps, fee_ppm_observed: feeObserved, vol_6h_usd: hourly.slice(-6).reduce((a, r) => a + r.volumeUsd, 0), vol_1h_usd: hourly.slice(-1).reduce((a, r) => a + r.volumeUsd, 0), age_days: age, vol7_avg_usd: v7.avg, vol7_cv: v7.cv, raw_apr: tvl && tvl > 0 ? fees * 365 / tvl : null,
         flags, fee_basis: pfUnknown ? 'gross' : 'lp_net',
-        excluded: flags.some(f => !['short_history', 'swap_fetch_failed', 'tvl_stale', 'hook_fee_only', 'ref_wide_spread', 'protocol_fee_unknown'].includes(f)) ? 1 : 0 })
+        excluded: flags.some(f => !['short_history', 'swap_fetch_failed', 'swap_not_fetched', 'tvl_stale', 'hook_fee_only', 'ref_wide_spread', 'protocol_fee_unknown'].includes(f)) ? 1 : 0 })
       if (poolsScanned % 25 === 0) log(`pools ${poolsScanned}/${pools.length} (calls ${JSON.stringify(usage.toJSON())})`)
     }
     } else { poolsScanned = (db.prepare('SELECT COUNT(*) c FROM pool_snapshots WHERE date=?').get(date) as any).c; log(`sim-only: ${poolsScanned} snapshots for ${date}`) }
@@ -237,13 +243,22 @@ export async function runDaily(opts: { dbPath?: string; now?: Date; simOnly?: bo
 const isMain = process.argv[1] && import.meta.url.endsWith(process.argv[1].split('/').pop()!)
 if (isMain) runDaily({ simOnly: process.argv.includes('--sim-only') }).catch(e => { console.error(e); process.exit(1) })
 
-/** 摘要的「我的頭寸」列：未關閉的頭寸。有鏈上快照 → 實際 vs 模擬；否則只有模擬估算（DECISIONS D27/D30） */
+/** D16/D65：這個池今天要不要拉 Swap。純函式，方便測試 */
+export function shouldFetchSwaps(a: { hookKind: 'none' | 'fee_only' | 'liquidity'; feeOk: boolean; lowFee: boolean; watched: boolean; tvl: number | null; minTvl: number; lowFeeMinTvl: number }): boolean {
+  if (a.hookKind === 'liquidity' || a.tvl === null) return false
+  if (a.feeOk) return a.tvl >= a.minTvl
+  return a.lowFee && a.watched && a.tvl >= a.lowFeeMinTvl   // 低費率池只為持有/觀察中的股票抓，且 TVL 要到候選門檻
+}
+
+/** 摘要的「我的頭寸」列：未關閉的頭寸。有鏈上快照 → 實際 vs 模擬；否則只有模擬估算（DECISIONS D27/D30）。D65：有換池提示時多一行縮排 */
 export function formatPositions(list: ReturnType<typeof listPositions>): string[] {
   const money = (v: number) => `${v >= 0 ? '+' : '−'}$${Math.abs(v).toFixed(2)}`
-  return list.filter(p => !p.closed_at).map(p => {
+  return list.filter(p => !p.closed_at).flatMap(p => {
     const days = p.actual ? Math.max(1, p.actual.days) : p.est ? Math.max(1, Math.round(p.est.hours / 24)) : 0
-    if (p.actual) return `${p.symbol}/USDG ${p.label} (${days}d)  手續費 ${money(p.actual.fees_cum_usd)} + 價差 ${money(p.actual.value_usd - p.deposit_usd)} = ${money(p.actual.net_usd)}（模擬 ${p.est ? money(p.est.net_usd) : '—'}）  在區間 ${p.actual.in_range ? '✓' : '✗'}`
-    if (!p.est) return `${p.symbol}/USDG ${p.label}  無小時資料`
-    return `${p.symbol}/USDG ${p.label}  ${money(p.est.net_usd)} (${days}d, 估算)  在區間 ${p.est.in_range ? '✓' : '✗'}`
+    const head = p.actual ? `${p.symbol}/USDG ${p.label} (${days}d)  手續費 ${money(p.actual.fees_cum_usd)} + 價差 ${money(p.actual.value_usd - p.deposit_usd)} = ${money(p.actual.net_usd)}（模擬 ${p.est ? money(p.est.net_usd) : '—'}）  在區間 ${p.actual.in_range ? '✓' : '✗'}`
+      : !p.est ? `${p.symbol}/USDG ${p.label}  無小時資料`
+      : `${p.symbol}/USDG ${p.label}  ${money(p.est.net_usd)} (${days}d, 估算)  在區間 ${p.est.in_range ? '✓' : '✗'}`
+    const hint = formatSwitchHint(p.switchHint)
+    return hint ? [head, '  ' + hint] : [head]
   })
 }

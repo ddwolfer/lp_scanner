@@ -23,7 +23,15 @@
   "scan": {
     "swap_fetch_min_tvl_usd": 1000,
     "wash_sample_swaps": 800,
-    "ref_max_spread_pct": 0.02
+    "ref_max_spread_pct": 0.02,
+    "watch_symbols": []
+  },
+  "switch_hint": {
+    "ratio": 1.5,
+    "days": 3,
+    "recover_days_max": 14,
+    "cold_usd_per_day": 1,
+    "cold_min_days": 5
   },
   "economics": {
     "gas_usd_per_tx": 0.2,

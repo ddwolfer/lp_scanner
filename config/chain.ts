@@ -37,7 +37,9 @@ const ScoringSchema = z.object({
     wash_overlap_volume_share: z.number(),
   }),
   wash_analysis_top_n: z.number(),
-  scan: z.object({ swap_fetch_min_tvl_usd: z.number(), wash_sample_swaps: z.number(), ref_max_spread_pct: z.number().default(0.02) }),
+  scan: z.object({ swap_fetch_min_tvl_usd: z.number(), wash_sample_swaps: z.number(), ref_max_spread_pct: z.number().default(0.02), watch_symbols: z.array(z.string()).default([]) }),
+  // D65：頭寸「是否該換池」提示的門檻
+  switch_hint: z.object({ ratio: z.number(), days: z.number(), recover_days_max: z.number(), cold_usd_per_day: z.number(), cold_min_days: z.number() }).default({ ratio: 1.5, days: 3, recover_days_max: 14, cold_usd_per_day: 1, cold_min_days: 5 }),
   economics: z.object({ gas_usd_per_tx: z.number(), lifecycle_txs: z.number(), capacity_share: z.number() }),
 })
 export type Scoring = z.infer<typeof ScoringSchema>

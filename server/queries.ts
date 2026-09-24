@@ -8,6 +8,7 @@ import { lifecycleCost, capacityUsd, volumePersistence, exitBreakeven } from '..
 import { L_HUMAN_TO_RAW } from '../scanner/metrics/lp-math.js'
 import { taipeiDate } from '../scanner/time.js'
 import { loadScoring } from '../config/chain.js'
+import { switchHint, type PoolSeries, type SwitchHint } from '../scanner/metrics/poolSwitch.js'
 
 const POOL_JOIN = `FROM pool_snapshots s JOIN pools p ON p.pool_id = s.pool_id
   JOIN tokens t ON t.address = CASE WHEN p.stock_is_token0 = 1 THEN p.token0 ELSE p.token1 END`
@@ -87,8 +88,37 @@ export function closePosition(db: Database.Database, id: number, c: { closed_at:
   db.prepare(`INSERT OR REPLACE INTO position_snapshots(position_id,date,value_usd,fees_cum_usd,in_range,gas_cum_usd) VALUES (?,?,?,?,NULL,NULL)`).run(id, c.closed_at.slice(0, 10), c.value_final_usd, c.fees_final_usd)
 }
 /** 頭寸卡片：現值與累積費以最新池價、pool_hourly 從 opened_at 起模擬估算（P5 前的暫代，DECISIONS D27） */
+const D65_FLAG_SINCE = '2026-09-26'   // swap_not_fetched 旗標開始寫入的第一個快照日
+/** D65：同股票 × USDG、無流動性 hook、TVL ≥ min_tvl 的池（含費率低於下限的池）最近 n 天的 LP 實得費與 TVL。回傳第一筆是 poolId 自己 */
+export function poolSeries(db: Database.Database, poolId: string, n = 7, minTvl = 5000): { held: PoolSeries | null; alts: PoolSeries[] } {
+  const me = db.prepare('SELECT * FROM pools WHERE pool_id=?').get(poolId) as any; if (!me) return { held: null, alts: [] }
+  const stock = me.stock_is_token0 ? me.token0 : me.token1
+  const rows = db.prepare(`SELECT p.pool_id, p.protocol, p.fee_ppm, p.hook_kind, p.hooks FROM pools p WHERE (CASE WHEN p.stock_is_token0=1 THEN p.token0 ELSE p.token1 END)=? AND COALESCE(p.quote_kind,'usdg')='usdg'`).all(stock) as any[]
+  // 以自己最新快照日往回 n 個日曆日為共同截止，不是「最近 n 筆」：漏掃後幾週前的高量日才不會留在平均裡（Codex code review）
+  const latestDate = (db.prepare('SELECT MAX(date) d FROM pool_snapshots WHERE pool_id=?').get(poolId) as { d: string | null }).d
+  if (!latestDate) return { held: null, alts: [] }
+  const since = new Date(Date.parse(latestDate) - (n - 1) * 86400000).toISOString().slice(0, 10)
+  const snapQ = db.prepare('SELECT date, fees_24h_usd, tvl_usd, flags, fee_ppm_observed, swap_count FROM pool_snapshots WHERE pool_id=? AND date>=? AND date<=? ORDER BY date')
+  const build = (p: any): PoolSeries | null => {
+    const snaps = snapQ.all(p.pool_id, since, latestDate) as any[]
+    const latestTvl = snaps.length ? snaps[snaps.length - 1].tvl_usd : null
+    const hookKind = p.hook_kind ?? (p.hooks === '0x0000000000000000000000000000000000000000' ? 'none' : 'liquidity')
+    if (p.pool_id !== poolId && (hookKind === 'liquidity' || latestTvl === null || latestTvl < minTvl)) return null
+    const observed = [...snaps].reverse().find(x => x.fee_ppm_observed !== null)?.fee_ppm_observed ?? null
+    const feePpm = observed ?? p.fee_ppm ?? 3000
+    const label = `${p.protocol} ${p.fee_ppm !== null ? (p.fee_ppm / 1e4).toFixed(2) + '%' : observed !== null ? '~' + (observed / 1e4).toFixed(2) + '%' : '動態'}`
+    return { poolId: p.pool_id, label, swapFeeRate: feePpm / 1e6, days: snaps.map(x => { const flags: string[] = (() => { try { return JSON.parse(x.flags ?? '[]') } catch { return [] } })()
+      // 沒抓 swap 的日子不能當成「費率 0」：新快照有 swap_not_fetched 旗標；D65 之前的舊快照沒有旗標，低費率池（fee_out_of_range）swap_count=0 就視為沒抓。抓了但整天沒成交算有效的零收益日（Codex plan review）
+      const legacyUnfetched = x.date < D65_FLAG_SINCE && !flags.includes('swap_not_fetched') && flags.includes('fee_out_of_range') && (x.swap_count ?? 0) === 0   // 只套用在旗標上線前的快照；之後「抓了沒成交」是有效的零收益日（Codex code review）
+      return { date: x.date, feesUsd: x.fees_24h_usd ?? 0, tvlUsd: x.tvl_usd, ok: !flags.includes('swap_fetch_failed') && !flags.includes('swap_not_fetched') && !flags.includes('protocol_fee_unknown') && !legacyUnfetched } }) }   // protocol_fee_unknown 那天存的是交易者總費，不能和 LP 實得互比（Codex code review）
+  }
+  const held = build(me)
+  const alts = rows.filter(r => r.pool_id !== poolId).map(build).filter((x): x is PoolSeries => x !== null)
+  return { held, alts }
+}
+
 export function listPositions(db: Database.Database) {
-  const econCfg = loadScoring().economics
+  const cfgAll = loadScoring(); const econCfg = cfgAll.economics
   const rows = db.prepare(`SELECT ps.*, t.symbol, p.fee_ppm FROM positions ps JOIN pools p ON p.pool_id=ps.pool_id
     JOIN tokens t ON t.address = CASE WHEN p.stock_is_token0 = 1 THEN p.token0 ELSE p.token1 END ORDER BY ps.id DESC`).all() as any[]
   return rows.map(r => {
@@ -176,7 +206,11 @@ export function listPositions(db: Database.Database) {
         breakeven = { lower: be.lower, upper: be.upper, paceUsdPerDay: pace, paceBasis, feesEarnedUsd: earnedNow, feesReinvestedUsd: reinvested, priceNow: Pnow, capitalChanged: liqChangeDays.size > 0 }   // 加減倉後 deposit_usd 需人工確認（Codex review）
       }
     }
-    return { ...r, notes_json: notes, journal, breakeven, est: simCap.length ? (() => { const e = simCap[simCap.length - 1]; const P = hours[hours.length - 1].priceUsd; return { value_usd: e.valueH, fees_cum_usd: e.grossFees, fees_reinvested_usd: e.reinvested, capital_usd: e.capital, in_range: P >= r.range_lower && P <= r.range_upper, net_usd: e.net, price: P, hours: simCap.length } })() : null,
+    // D65：換池提示。只對持有中的頭寸；費速用保本線的 7 天 pace（沒有就 null，不判冷）
+    let switchHintOut: SwitchHint | null = null
+    if (!r.closed_at) { const { held: hs, alts } = poolSeries(db, r.pool_id, 7, cfgAll.exclusions.min_tvl_usd)
+      if (hs) switchHintOut = switchHint({ held: hs, alts, depositUsd: r.deposit_usd, paceUsdPerDay: breakeven ? breakeven.paceUsdPerDay : null, heldDays: actual?.days ?? 0, inRange: actual ? actual.in_range : true, asOf: hs.days.length ? hs.days[hs.days.length - 1].date : taipeiDate(new Date()), cfg: { ...cfgAll.switch_hint, gas_usd_per_tx: econCfg.gas_usd_per_tx, lifecycle_txs: econCfg.lifecycle_txs, capacity_share: econCfg.capacity_share } }) }
+    return { ...r, notes_json: notes, journal, breakeven, switchHint: switchHintOut, est: simCap.length ? (() => { const e = simCap[simCap.length - 1]; const P = hours[hours.length - 1].priceUsd; return { value_usd: e.valueH, fees_cum_usd: e.grossFees, fees_reinvested_usd: e.reinvested, capital_usd: e.capital, in_range: P >= r.range_lower && P <= r.range_upper, net_usd: e.net, price: P, hours: simCap.length } })() : null,
       actual, history, capitalMarks, feesWithdrawnUsd: withdrawnBy(latest ? snapIso(latest) : new Date().toISOString()), feesReinvestedUsd: reinvested, curve: simCap.map(e => ({ ts: e.ts, net: e.net })), final: finalSnap ? { value_usd: finalSnap.value_usd, fees_cum_usd: finalSnap.fees_cum_usd } : null }
   })
 }
