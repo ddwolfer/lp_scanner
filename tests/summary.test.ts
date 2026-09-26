@@ -50,5 +50,5 @@ it('formatPositions 一行一個頭寸：標籤、天數、昨日費、換池結
   expect(formatFeesTotal(rows)).toBe('Σ 昨日費 +$7.05（0.17%/日） · 累積手續費 +$29.71 · 累積淨 +$57.25')   // 平均 26.3h，偏離 < 3h 不印時數
   expect(formatFeesTotal([rows[0], rows[2]])).toBeNull()
   const text = formatDailySummary({ date: 'd', weekdayZh: '一', poolsScanned: 1, candidates: 0, sortKey: 'd1000.r25', top: [], changes: [], positions: [...formatPositions(rows), formatFeesTotal(rows)!] })
-  expect(text).toContain('\nΣ 昨日費'); expect(text).not.toContain('- Σ')
+  expect(text).toContain('⚖️ 待累積\n\nΣ 昨日費'); expect(text).not.toContain('- Σ')
 })
