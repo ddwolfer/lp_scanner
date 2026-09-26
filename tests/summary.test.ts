@@ -27,7 +27,7 @@ it('有 topicId 時帶 message_thread_id', async () => {
   await sendTelegram('hi', { token: 'T', chatId: 'C', topicId: '42' }, f as any)
   expect(JSON.parse(f.mock.calls[0][1].body)).toMatchObject({ chat_id: 'C', message_thread_id: 42 })
 })
-import { formatPositions, shouldFetchSwaps, formatFeesTotal } from '../scanner/run.js'
+import { formatPositions, shouldFetchSwaps, formatFeesTotal, formatApr } from '../scanner/run.js'
 it('formatPositions 一行一個頭寸：標籤、天數、昨日費、換池結論；出區間才標', () => {
   const rows = [
     { symbol: 'SOFI', label: '#1', closed_at: null, est: { net_usd: 18.4, hours: 168, in_range: true } },
@@ -49,6 +49,9 @@ it('formatPositions 一行一個頭寸：標籤、天數、昨日費、換池結
   ])
   expect(formatFeesTotal(rows)).toBe('Σ 昨日費 +$7.05（0.17%/日） · 累積手續費 +$29.71 · 累積淨 +$57.25')   // 平均 26.3h，偏離 < 3h 不印時數
   expect(formatFeesTotal([rows[0], rows[2]])).toBeNull()
-  const text = formatDailySummary({ date: 'd', weekdayZh: '一', poolsScanned: 1, candidates: 0, sortKey: 'd1000.r25', top: [], changes: [], positions: [...formatPositions(rows), formatFeesTotal(rows)!] })
-  expect(text).toContain('⚖️ 待累積\n\nΣ 昨日費'); expect(text).not.toContain('- Σ')
+  // 年化：Σ投入×天數 = 645.45×1 + 1056.92×16 + 2106.92×3 = 23876.93；手續費 29.71 → 45%，淨 57.25 → 88%；加權天數 23876.93/3809.29 = 6.3
+  expect(formatApr(rows)).toBe('年化 手續費 45% · 含價差 88%（投入 $3809，加權 6.3 天）')
+  expect(formatApr([rows[0]])).toBeNull()
+  const text = formatDailySummary({ date: 'd', weekdayZh: '一', poolsScanned: 1, candidates: 0, sortKey: 'd1000.r25', top: [], changes: [], positions: [...formatPositions(rows), formatFeesTotal(rows)!, formatApr(rows)!] })
+  expect(text).toContain('⚖️ 待累積\n\nΣ 昨日費'); expect(text).not.toContain('- Σ'); expect(text).toContain('\n年化 手續費'); expect(text).not.toContain('- 年化')
 })

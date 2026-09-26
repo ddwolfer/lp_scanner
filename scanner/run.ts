@@ -220,7 +220,7 @@ export async function runDaily(opts: { dbPath?: string; now?: Date; simOnly?: bo
                      ...cands.filter(r => !prev.has(r.pool_id) && prev.size > 0).map(r => ({ label: label(r), kind: 'added' as const }))]
     const text = formatDailySummary({ date, weekdayZh: WEEKDAY_ZH[new Date(date + 'T00:00:00+08:00').getDay()], poolsScanned, candidates: cands.length, sortKey: scoring.sort_key,
       top: cands.slice(0, 5).map(r => { const sim = r.sim ? JSON.parse(r.sim) as SimJson : null
-        return { label: label(r), feePct: r.fee_ppm !== null ? (r.fee_ppm / 1e4).toFixed(2) + '%' : r.fee_ppm_observed !== null ? '~' + (r.fee_ppm_observed / 1e4).toFixed(2) + '%' : '動態', netApr: getSimField(sim, scoring.sort_key, scoring.rank_field ?? 'net_apr_trimmed'), inRangePct: getSimField(sim, scoring.sort_key, 'in_range_pct'), traderCount: r.trader_count } }), changes, positions: (() => { const l = listPositions(db); const t = formatFeesTotal(l); return [...formatPositions(l), ...(t ? [t] : [])] })(), dashboardUrl: process.env.DASHBOARD_URL })
+        return { label: label(r), feePct: r.fee_ppm !== null ? (r.fee_ppm / 1e4).toFixed(2) + '%' : r.fee_ppm_observed !== null ? '~' + (r.fee_ppm_observed / 1e4).toFixed(2) + '%' : '動態', netApr: getSimField(sim, scoring.sort_key, scoring.rank_field ?? 'net_apr_trimmed'), inRangePct: getSimField(sim, scoring.sort_key, 'in_range_pct'), traderCount: r.trader_count } }), changes, positions: (() => { const l = listPositions(db); const t = formatFeesTotal(l); const a = formatApr(l); return [...formatPositions(l), ...(t ? [t] : []), ...(a ? [a] : [])] })(), dashboardUrl: process.env.DASHBOARD_URL })
     // D58：資料完整性。swap 抓取失敗比例 > 20%、一個都沒抓、或發現階段失敗 → 摘要開頭標警告，scan_runs.degraded=1（watchdog 會再確認）
     const failPct = swapPools ? swapFailed / swapPools : 0; const degraded = opts.simOnly ? null : (discoveryFailed || swapPools === 0 || failPct > 0.2 || whitelistStale || caStale)   // 上游快取也算不完整，watchdog 才看得到（Codex review）   // --sim-only 不抓 swap：狀態未知記 NULL，不覆蓋成正常（Codex review）
     const staleNote = [whitelistStale ? '白名單用昨日快取（Robinhood /assets 抓不到，新上市股票可能漏掉）' : '', caStale ? '公司行動用昨日快取（新公告不會被排除）' : ''].filter(Boolean).map(x => '⚠️ ' + x).join('\n')
@@ -264,6 +264,17 @@ export function formatPositions(list: ReturnType<typeof listPositions>): string[
       : h.verdict === 'cold' ? '  ⚖️ 量已冷' : h.verdict === 'no_data' ? '  ⚖️ 待累積' : '  ⚖️ 留'
     return `${label} (${days}d)${lastDay}${p.actual.in_range ? '' : '  ✗ 出區間'}${hint}`
   })
+}
+/** D66：年化 = 累積金額 ÷ Σ(投入 × 持有天數) × 365，投入用目前 deposit_usd（加倉後含加倉），天數用鏈上快照的持有天數。手續費與含價差各一個 */
+export function formatApr(list: ReturnType<typeof listPositions>): string | null {
+  const open = list.filter(p => !p.closed_at && p.actual)
+  const capDays = open.reduce((a, p) => a + p.deposit_usd * Math.max(1, p.actual!.days), 0)
+  if (capDays <= 0) return null
+  const feesCum = open.reduce((a, p) => a + p.actual!.fees_cum_usd + p.actual!.fees_withdrawn_usd + p.actual!.fees_reinvested_usd, 0)
+  const netCum = open.reduce((a, p) => a + p.actual!.net_usd, 0)
+  const dep = open.reduce((a, p) => a + p.deposit_usd, 0)
+  const pct = (v: number) => `${v >= 0 ? '' : '−'}${Math.abs(v * 365 / capDays * 100).toFixed(0)}%`
+  return `年化 手續費 ${pct(feesCum)} · 含價差 ${pct(netCum)}（投入 $${dep.toFixed(0)}，加權 ${(capDays / dep).toFixed(1)} 天）`
 }
 /** D66：日報頭寸段的合計行：昨日費（%/日）· 累積手續費 · 累積淨。沒有鏈上頭寸回 null */
 export function formatFeesTotal(list: ReturnType<typeof listPositions>): string | null {
