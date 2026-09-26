@@ -28,43 +28,27 @@ it('有 topicId 時帶 message_thread_id', async () => {
   expect(JSON.parse(f.mock.calls[0][1].body)).toMatchObject({ chat_id: 'C', message_thread_id: 42 })
 })
 import { formatPositions, shouldFetchSwaps, formatFeesTotal } from '../scanner/run.js'
-it('formatPositions 只列未關閉頭寸', () => {
+it('formatPositions 一行一個頭寸：標籤、天數、昨日費、換池結論；出區間才標', () => {
   const rows = [
     { symbol: 'SOFI', label: '#1', closed_at: null, est: { net_usd: 18.4, hours: 168, in_range: true } },
-    { symbol: 'MSTR', label: '#2b', closed_at: null, deposit_usd: 645.45, actual: { fees_cum_usd: 3.87, value_usd: 655.71, net_usd: 14.13, days: 1, in_range: true }, est: { net_usd: 11.34, hours: 10, in_range: true } },
+    { symbol: 'MSTR', label: 'MSTR #2b', closed_at: null, deposit_usd: 645.45, actual: { fees_cum_usd: 3.87, value_usd: 655.71, net_usd: 14.13, days: 1, in_range: false, fees_withdrawn_usd: 0, fees_reinvested_usd: 0 }, est: null,
+      feesLastDay: { usd: 2.59, hours: 24, from: 'a', to: 'b' }, switchHint: { verdict: 'consider', best: { label: 'v4 ~0.15%' }, extraPerDay: 3.41, recoverDays: 1.8 } },
     { symbol: 'IBM', label: '#2', closed_at: '2026-09-01', est: { net_usd: -1, hours: 24, in_range: false } },
     { symbol: 'AMD', label: '#3', closed_at: null, est: null },
+    { symbol: 'TSLA', label: 'TSLA #1233', closed_at: null, deposit_usd: 1056.92, actual: { fees_cum_usd: 24.04, value_usd: 1067.09, net_usd: 33.84, days: 16, in_range: true, fees_withdrawn_usd: 0, fees_reinvested_usd: 0 }, est: null,
+      feesLastDay: { usd: 3.2, hours: 31, from: 'a', to: 'b' }, switchHint: { verdict: 'stay' } },
+    { symbol: 'GOOGL', label: 'GOOGL #7005', closed_at: null, deposit_usd: 2106.92, actual: { fees_cum_usd: 1.8, value_usd: 2114, net_usd: 9.28, days: 3, in_range: true, fees_withdrawn_usd: 0, fees_reinvested_usd: 0 }, est: null,
+      feesLastDay: { usd: 1.26, hours: 24, from: 'a', to: 'b' }, switchHint: { verdict: 'no_data' } },
   ] as any
-  expect(formatPositions(rows)).toEqual(['SOFI/USDG #1  +$18.40 (7d, 估算)  在區間 ✓', 'MSTR/USDG #2b (1d)  手續費 +$3.87 + 價差 +$10.26 = +$14.13（模擬 +$11.34）  在區間 ✓', 'AMD/USDG #3  無小時資料'])
-})
-
-it('formatPositions 有換池提示時加一行縮排（D65）', () => {
-  const rows = [{ symbol: 'SPCX', label: '#7838', closed_at: null, deposit_usd: 1953.8, actual: { fees_cum_usd: 12.1, value_usd: 1949.6, net_usd: 7.9, days: 3, in_range: true }, est: null,
-    switchHint: { verdict: 'consider', heldRate7: 0.0008, validDays: 7, altsPending: 0, best: { poolId: 'x', label: 'v3 0.05%', rate7: 0.0023 }, daysAbove: 3, extraPerDay: 3, switchCostUsd: 13.3, recoverDays: 4.43 } }] as any
-  expect(formatPositions(rows)).toEqual(['SPCX/USDG #7838 (3d)  手續費 +$12.10 + 價差 −$4.20 = +$7.90（模擬 —）  在區間 ✓', '  ⚖️ 費/TVL 7日 0.08%/日 vs 最佳替代 v3 0.05% 0.23%/日 ×3天 → 考慮換（粗估多賺 $3.00/日，換池成本 $13.30，4.4 天回本）'])
-})
-it('shouldFetchSwaps：低費率池只為持有/觀察中的股票抓（D65）', () => {
-  const base = { hookKind: 'none' as const, feeOk: false, lowFee: true, tvl: 20000, minTvl: 1000, lowFeeMinTvl: 5000 }
-  expect(shouldFetchSwaps({ ...base, watched: true })).toBe(true)
-  expect(shouldFetchSwaps({ ...base, watched: false })).toBe(false)
-  expect(shouldFetchSwaps({ ...base, watched: true, tvl: 3000 })).toBe(false)              // 低費率池 TVL 要到候選門檻
-  expect(shouldFetchSwaps({ ...base, watched: true, hookKind: 'liquidity' })).toBe(false)  // 流動性 hook 永遠不抓
-  expect(shouldFetchSwaps({ ...base, watched: false, feeOk: true, lowFee: false, tvl: 1500 })).toBe(true)   // 一般池照 D16
-  expect(shouldFetchSwaps({ ...base, watched: true, feeOk: false, lowFee: false })).toBe(false)             // 費率過高的池不抓
-  expect(shouldFetchSwaps({ ...base, watched: true, tvl: null })).toBe(false)
-})
-
-it('D66：昨日費附在頭寸行尾，合計行不加 bullet', () => {
-  const rows = [
-    { symbol: 'TSLA', label: '#1', closed_at: null, deposit_usd: 1056.92, actual: { fees_cum_usd: 23.99, value_usd: 1067.09, net_usd: 34.17, days: 15, in_range: true }, est: null, feesLastDay: { usd: 3.57, hours: 24.2, from: 'a', to: 'b' } },
-    { symbol: 'SPCX', label: '#2', closed_at: null, deposit_usd: 1953.8, actual: { fees_cum_usd: 1.29, value_usd: 1956.37, net_usd: 3.86, days: 2, in_range: true }, est: null, feesLastDay: { usd: 1.29, hours: 31, from: 'a', to: 'b' } },
-    { symbol: 'IBM', label: '#3', closed_at: '2026-09-01', deposit_usd: 100, actual: { fees_cum_usd: 1, value_usd: 100, net_usd: 1, days: 1, in_range: true }, est: null, feesLastDay: { usd: 9, hours: 24, from: 'a', to: 'b' } },
-  ] as any
-  const lines = formatPositions(rows)
-  expect(lines[0]).toMatch(/在區間 ✓  昨日費 \+\$3\.57$/)
-  expect(lines[1]).toMatch(/昨日費 \+\$1\.29 \(31h\)$/)
-  expect(formatFeesTotal(rows)).toBe('Σ 昨日手續費 +$4.86 / 投入 $3011（0.14%/日，28h）')   // 閉倉不算；平均 27.6h 偏離 24h > 3h → 印時數
-  expect(formatFeesTotal([rows[2]])).toBeNull()
-  const text = formatDailySummary({ date: 'd', weekdayZh: '一', poolsScanned: 1, candidates: 0, sortKey: 'd1000.r25', top: [], changes: [], positions: [...lines, formatFeesTotal(rows)!] })
-  expect(text).toContain('\nΣ 昨日手續費'); expect(text).not.toContain('- Σ')
+  expect(formatPositions(rows)).toEqual([
+    'SOFI #1 (7d)  估算 +$18.40',
+    'MSTR #2b (1d)  昨日費 +$2.59  ✗ 出區間  ⚖️ 考慮換 → v4 ~0.15%（多賺 $3.41/日，1.8 天回本）',
+    'AMD #3  無小時資料',
+    'TSLA #1233 (16d)  昨日費 +$3.20 (31h)  ⚖️ 留',
+    'GOOGL #7005 (3d)  昨日費 +$1.26  ⚖️ 待累積',
+  ])
+  expect(formatFeesTotal(rows)).toBe('Σ 昨日費 +$7.05（0.17%/日） · 累積手續費 +$29.71 · 累積淨 +$57.25')   // 平均 26.3h，偏離 < 3h 不印時數
+  expect(formatFeesTotal([rows[0], rows[2]])).toBeNull()
+  const text = formatDailySummary({ date: 'd', weekdayZh: '一', poolsScanned: 1, candidates: 0, sortKey: 'd1000.r25', top: [], changes: [], positions: [...formatPositions(rows), formatFeesTotal(rows)!] })
+  expect(text).toContain('\nΣ 昨日費'); expect(text).not.toContain('- Σ')
 })

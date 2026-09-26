@@ -250,25 +250,32 @@ export function shouldFetchSwaps(a: { hookKind: 'none' | 'fee_only' | 'liquidity
   return a.lowFee && a.watched && a.tvl >= a.lowFeeMinTvl   // 低費率池只為持有/觀察中的股票抓，且 TVL 要到候選門檻
 }
 
-/** 摘要的「我的頭寸」列：未關閉的頭寸。有鏈上快照 → 實際 vs 模擬；否則只有模擬估算（DECISIONS D27/D30）。D65：有換池提示時多一行縮排 */
+/** 摘要的「我的頭寸」列：一行一個持有中的頭寸，只留標籤、天數、昨日費、換池結論（D65/D66；使用者 9/26 要求 TG 精簡，細節看 dashboard）。
+ *  沒有鏈上快照的手動頭寸只印標籤與估算淨值。 */
 export function formatPositions(list: ReturnType<typeof listPositions>): string[] {
   const money = (v: number) => `${v >= 0 ? '+' : '−'}$${Math.abs(v).toFixed(2)}`
-  return list.filter(p => !p.closed_at).flatMap(p => {
+  return list.filter(p => !p.closed_at).map(p => {
     const days = p.actual ? Math.max(1, p.actual.days) : p.est ? Math.max(1, Math.round(p.est.hours / 24)) : 0
-    const lastDay = p.feesLastDay ? `  昨日費 ${money(p.feesLastDay.usd)}${Math.abs(p.feesLastDay.hours - 24) > 3 ? ` (${Math.round(p.feesLastDay.hours)}h)` : ''}` : ''   // D66：時數偏離 24h 超過 3 小時才標
-    const head = p.actual ? `${p.symbol}/USDG ${p.label} (${days}d)  手續費 ${money(p.actual.fees_cum_usd)} + 價差 ${money(p.actual.value_usd - p.deposit_usd)} = ${money(p.actual.net_usd)}（模擬 ${p.est ? money(p.est.net_usd) : '—'}）  在區間 ${p.actual.in_range ? '✓' : '✗'}${lastDay}`
-      : !p.est ? `${p.symbol}/USDG ${p.label}  無小時資料`
-      : `${p.symbol}/USDG ${p.label}  ${money(p.est.net_usd)} (${days}d, 估算)  在區間 ${p.est.in_range ? '✓' : '✗'}`
-    const hint = formatSwitchHint(p.switchHint)
-    return hint ? [head, '  ' + hint] : [head]
+    const label = p.label.includes(p.symbol) ? p.label : `${p.symbol} ${p.label}`
+    if (!p.actual) return p.est ? `${label} (${days}d)  估算 ${money(p.est.net_usd)}${p.est.in_range ? '' : '  ✗ 出區間'}` : `${label}  無小時資料`
+    const lastDay = p.feesLastDay ? `  昨日費 ${money(p.feesLastDay.usd)}${Math.abs(p.feesLastDay.hours - 24) > 3 ? ` (${Math.round(p.feesLastDay.hours)}h)` : ''}` : ''   // 時數偏離 24h 超過 3 小時才標
+    const h = p.switchHint
+    const hint = !h ? '' : h.verdict === 'consider' && h.best ? `  ⚖️ 考慮換 → ${h.best.label}（多賺 $${(h.extraPerDay as number).toFixed(2)}/日，${(h.recoverDays as number).toFixed(1)} 天回本）`
+      : h.verdict === 'cold' ? '  ⚖️ 量已冷' : h.verdict === 'no_data' ? '  ⚖️ 待累積' : '  ⚖️ 留'
+    return `${label} (${days}d)${lastDay}${p.actual.in_range ? '' : '  ✗ 出區間'}${hint}`
   })
 }
-/** D66：日報頭寸段的合計行：昨日手續費 / 投入（%/日，切點）。沒有任何昨日費資料回 null */
+/** D66：日報頭寸段的合計行：昨日費（%/日）· 累積手續費 · 累積淨。沒有鏈上頭寸回 null */
 export function formatFeesTotal(list: ReturnType<typeof listPositions>): string | null {
-  const open = list.filter(p => !p.closed_at && p.feesLastDay)
+  const money = (v: number) => `${v >= 0 ? '+' : '−'}$${Math.abs(v).toFixed(2)}`
+  const open = list.filter(p => !p.closed_at && p.actual)
   if (!open.length) return null
-  const usd = open.reduce((a, p) => a + p.feesLastDay!.usd, 0), dep = open.reduce((a, p) => a + p.deposit_usd, 0)
-  const hours = open.reduce((a, p) => a + p.feesLastDay!.hours, 0) / open.length
+  const withDay = open.filter(p => p.feesLastDay)
+  const usd = withDay.reduce((a, p) => a + p.feesLastDay!.usd, 0), dep = withDay.reduce((a, p) => a + p.deposit_usd, 0)
+  const hours = withDay.length ? withDay.reduce((a, p) => a + p.feesLastDay!.hours, 0) / withDay.length : 0
   const perDay = dep > 0 && hours > 0 ? usd / dep * (24 / hours) : null
-  return `Σ 昨日手續費 ${usd >= 0 ? '+' : '−'}$${Math.abs(usd).toFixed(2)} / 投入 $${dep.toFixed(0)}${perDay !== null ? `（${(perDay * 100).toFixed(2)}%/日` : '（'}，${Math.abs(hours - 24) > 3 ? `${Math.round(hours)}h` : '06:00→06:00'}）`
+  const feesCum = open.reduce((a, p) => a + p.actual!.fees_cum_usd + p.actual!.fees_withdrawn_usd + p.actual!.fees_reinvested_usd, 0)   // 未領 + 領出 + 再投入（與卡片「手續費合計」同口徑）
+  const netCum = open.reduce((a, p) => a + p.actual!.net_usd, 0)
+  const day = withDay.length ? `Σ 昨日費 ${money(usd)}${perDay !== null ? `（${(perDay * 100).toFixed(2)}%/日${Math.abs(hours - 24) > 3 ? `，${Math.round(hours)}h` : ''}）` : ''} · ` : ''
+  return `${day}累積手續費 ${money(feesCum)} · 累積淨 ${money(netCum)}`
 }
