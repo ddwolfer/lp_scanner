@@ -1,6 +1,8 @@
 import { it, expect } from 'vitest'
 import { openDb } from '../db/index.js'
 import { getDates, getOverview, getPool, createPosition, closePosition, listPositions, addJournal, listJournal, exportPositions, weekendWindow, poolSeries } from '../server/queries.js'
+import { shouldWriteSnapshot } from '../scanner/positionsStage.js'
+import { writePositionSnapshot } from '../scanner/steps.js'
 import { readFileSync, rmSync } from 'node:fs'
 import { writeSnapshot, writeHourly, updateSim } from '../scanner/steps.js'
 function seed() {
@@ -114,4 +116,28 @@ it('D65：費率低於下限而被排除的池，頭寸模擬與換池提示仍�
   expect(s.held!.days.map(d => d.ok)).toEqual([true, false])
   expect(poolSeries(db, '0x3', 40, 5000).held!.days.map(d => d.ok)).toEqual([false, false, true, true, true, false])
   expect(p.switchHint!.validDays).toBe(1); expect(p.switchHint!.verdict).toBe('no_data')   // 7 個日曆日內自己只有 1 個有效日
+})
+
+it('D66：feesLastDay 取最近兩筆快照的已賺差（領過的加回）；只有一筆從開倉算；shouldWriteSnapshot 的 if_missing/force', () => {
+  const db = seed()
+  const id = createPosition(db, { pool_id: '0x1', label: 'fee', range_lower: 7.5, range_upper: 12.5, deposit_usd: 1000, opened_at: '2026-09-01T10:00:00Z' })
+  db.prepare(`UPDATE positions SET notes=? WHERE id=?`).run(JSON.stringify({ source: 'onchain', tokenId: '1' }), id)
+  db.prepare(`INSERT INTO position_snapshots(position_id,date,value_usd,fees_cum_usd,in_range,taken_at) VALUES (?,?,?,?,1,?)`).run(id, '2026-09-02', 1000, 4, '2026-09-01T22:00:00Z')
+  let [p] = listPositions(db)
+  expect(p.feesLastDay).toMatchObject({ usd: 4, hours: 12, from: '2026-09-01T10:00:00Z' })
+  db.prepare(`INSERT INTO position_snapshots(position_id,date,value_usd,fees_cum_usd,in_range,taken_at) VALUES (?,?,?,?,1,?)`).run(id, '2026-09-03', 1000, 6.5, '2026-09-02T22:00:00Z')
+  ;[p] = listPositions(db)
+  expect(p.feesLastDay!.usd).toBeCloseTo(2.5); expect(p.feesLastDay!.hours).toBe(24)
+  // 9/3 領了 $6.5（未領歸零），9/4 快照未領 $1.2 → 昨日費 = (1.2 + 6.5) − 6.5 = 1.2
+  addJournal(db, id, 'collect', '領費', { usd: 6.5 })
+  db.prepare(`UPDATE position_journal SET ts=? WHERE position_id=?`).run('2026-09-03T05:00:00Z', id)
+  db.prepare(`INSERT INTO position_snapshots(position_id,date,value_usd,fees_cum_usd,in_range,taken_at) VALUES (?,?,?,?,1,?)`).run(id, '2026-09-04', 1000, 1.2, '2026-09-03T22:00:00Z')
+  ;[p] = listPositions(db)
+  expect(p.feesLastDay!.usd).toBeCloseTo(1.2)
+  expect(shouldWriteSnapshot(db, id, '2026-09-04', false, 'if_missing')).toBe(false)
+  expect(shouldWriteSnapshot(db, id, '2026-09-05', false, 'if_missing')).toBe(true)
+  expect(shouldWriteSnapshot(db, id, '2026-09-04', false, 'force')).toBe(true)
+  expect(shouldWriteSnapshot(db, id, '2026-09-04', true, 'if_missing')).toBe(true)
+  writePositionSnapshot(db, id, '2026-09-05', { valueUsd: 1, feesUsd: 1, inRange: true })
+  expect(db.prepare('SELECT taken_at FROM position_snapshots WHERE position_id=? AND date=?').get(id, '2026-09-05')).toBeTruthy()
 })

@@ -220,7 +220,7 @@ export async function runDaily(opts: { dbPath?: string; now?: Date; simOnly?: bo
                      ...cands.filter(r => !prev.has(r.pool_id) && prev.size > 0).map(r => ({ label: label(r), kind: 'added' as const }))]
     const text = formatDailySummary({ date, weekdayZh: WEEKDAY_ZH[new Date(date + 'T00:00:00+08:00').getDay()], poolsScanned, candidates: cands.length, sortKey: scoring.sort_key,
       top: cands.slice(0, 5).map(r => { const sim = r.sim ? JSON.parse(r.sim) as SimJson : null
-        return { label: label(r), feePct: r.fee_ppm !== null ? (r.fee_ppm / 1e4).toFixed(2) + '%' : r.fee_ppm_observed !== null ? '~' + (r.fee_ppm_observed / 1e4).toFixed(2) + '%' : '動態', netApr: getSimField(sim, scoring.sort_key, scoring.rank_field ?? 'net_apr_trimmed'), inRangePct: getSimField(sim, scoring.sort_key, 'in_range_pct'), traderCount: r.trader_count } }), changes, positions: formatPositions(listPositions(db)), dashboardUrl: process.env.DASHBOARD_URL })
+        return { label: label(r), feePct: r.fee_ppm !== null ? (r.fee_ppm / 1e4).toFixed(2) + '%' : r.fee_ppm_observed !== null ? '~' + (r.fee_ppm_observed / 1e4).toFixed(2) + '%' : '動態', netApr: getSimField(sim, scoring.sort_key, scoring.rank_field ?? 'net_apr_trimmed'), inRangePct: getSimField(sim, scoring.sort_key, 'in_range_pct'), traderCount: r.trader_count } }), changes, positions: (() => { const l = listPositions(db); const t = formatFeesTotal(l); return [...formatPositions(l), ...(t ? [t] : [])] })(), dashboardUrl: process.env.DASHBOARD_URL })
     // D58：資料完整性。swap 抓取失敗比例 > 20%、一個都沒抓、或發現階段失敗 → 摘要開頭標警告，scan_runs.degraded=1（watchdog 會再確認）
     const failPct = swapPools ? swapFailed / swapPools : 0; const degraded = opts.simOnly ? null : (discoveryFailed || swapPools === 0 || failPct > 0.2 || whitelistStale || caStale)   // 上游快取也算不完整，watchdog 才看得到（Codex review）   // --sim-only 不抓 swap：狀態未知記 NULL，不覆蓋成正常（Codex review）
     const staleNote = [whitelistStale ? '白名單用昨日快取（Robinhood /assets 抓不到，新上市股票可能漏掉）' : '', caStale ? '公司行動用昨日快取（新公告不會被排除）' : ''].filter(Boolean).map(x => '⚠️ ' + x).join('\n')
@@ -255,10 +255,20 @@ export function formatPositions(list: ReturnType<typeof listPositions>): string[
   const money = (v: number) => `${v >= 0 ? '+' : '−'}$${Math.abs(v).toFixed(2)}`
   return list.filter(p => !p.closed_at).flatMap(p => {
     const days = p.actual ? Math.max(1, p.actual.days) : p.est ? Math.max(1, Math.round(p.est.hours / 24)) : 0
-    const head = p.actual ? `${p.symbol}/USDG ${p.label} (${days}d)  手續費 ${money(p.actual.fees_cum_usd)} + 價差 ${money(p.actual.value_usd - p.deposit_usd)} = ${money(p.actual.net_usd)}（模擬 ${p.est ? money(p.est.net_usd) : '—'}）  在區間 ${p.actual.in_range ? '✓' : '✗'}`
+    const lastDay = p.feesLastDay ? `  昨日費 ${money(p.feesLastDay.usd)}${Math.abs(p.feesLastDay.hours - 24) > 3 ? ` (${Math.round(p.feesLastDay.hours)}h)` : ''}` : ''   // D66：時數偏離 24h 超過 3 小時才標
+    const head = p.actual ? `${p.symbol}/USDG ${p.label} (${days}d)  手續費 ${money(p.actual.fees_cum_usd)} + 價差 ${money(p.actual.value_usd - p.deposit_usd)} = ${money(p.actual.net_usd)}（模擬 ${p.est ? money(p.est.net_usd) : '—'}）  在區間 ${p.actual.in_range ? '✓' : '✗'}${lastDay}`
       : !p.est ? `${p.symbol}/USDG ${p.label}  無小時資料`
       : `${p.symbol}/USDG ${p.label}  ${money(p.est.net_usd)} (${days}d, 估算)  在區間 ${p.est.in_range ? '✓' : '✗'}`
     const hint = formatSwitchHint(p.switchHint)
     return hint ? [head, '  ' + hint] : [head]
   })
+}
+/** D66：日報頭寸段的合計行：昨日手續費 / 投入（%/日，切點）。沒有任何昨日費資料回 null */
+export function formatFeesTotal(list: ReturnType<typeof listPositions>): string | null {
+  const open = list.filter(p => !p.closed_at && p.feesLastDay)
+  if (!open.length) return null
+  const usd = open.reduce((a, p) => a + p.feesLastDay!.usd, 0), dep = open.reduce((a, p) => a + p.deposit_usd, 0)
+  const hours = open.reduce((a, p) => a + p.feesLastDay!.hours, 0) / open.length
+  const perDay = dep > 0 && hours > 0 ? usd / dep * (24 / hours) : null
+  return `Σ 昨日手續費 ${usd >= 0 ? '+' : '−'}$${Math.abs(usd).toFixed(2)} / 投入 $${dep.toFixed(0)}${perDay !== null ? `（${(perDay * 100).toFixed(2)}%/日` : '（'}，${Math.abs(hours - 24) > 3 ? `${Math.round(hours)}h` : '06:00→06:00'}）`
 }

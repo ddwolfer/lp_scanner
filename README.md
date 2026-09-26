@@ -44,8 +44,9 @@ pnpm scan          # 跑一次每日流程（約 30 分鐘）
 
 ```
 # 每日掃描（launchd，Mac 時區需為 Asia/Taipei）
-cp ops/com.lp-scanner.daily.plist ~/Library/LaunchAgents/
+cp ops/com.lp-scanner.daily.plist ops/com.lp-scanner.positions.plist ~/Library/LaunchAgents/
 launchctl load ~/Library/LaunchAgents/com.lp-scanner.daily.plist
+launchctl load ~/Library/LaunchAgents/com.lp-scanner.positions.plist   # 06:00 頭寸快照（每日手續費切點，D66）
 
 # Dashboard 常駐（pm2）
 pnpm web:build

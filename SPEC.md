@@ -61,7 +61,7 @@ Robinhood Chain（chainId 4663，Arbitrum Orbit L2）上有 Uniswap v2/v3/v4，�
 - 單一 repo、pnpm workspace 或簡單的多目錄皆可。
 - Node 22+，TypeScript。
 - Scanner 與 server 是兩個獨立程序；scanner 由 launchd 或 CLYDE cron 觸發，server 用 pm2 保活。
-- 排程：**每天一次，07:30 Asia/Taipei**（美股收盤後、台灣早上）。七天都跑，快照標記 `is_weekday`。
+- 排程：**每天一次，07:30 Asia/Taipei**（美股收盤後、台灣早上）。七天都跑，快照標記 `is_weekday`。頭寸快照另由 **06:00 Asia/Taipei** 的 `com.lp-scanner.positions` 寫入（D66，每日手續費的切點）；07:30 掃描與手動同步只補當天缺的快照。
 
 ---
 
@@ -383,8 +383,9 @@ Top 5 (投入 $1000, ±25%)
 - AAPL/USDG 新進候選
 
 💼 我的頭寸
-- SOFI/USDG #1  +$18.40 (7d)  在區間 ✓
+- SOFI/USDG #1  +$18.40 (7d)  在區間 ✓  昨日費 +$3.57
   ⚖️ 費/TVL 7日 0.08%/日 vs 最佳替代 v3 0.05% 0.23%/日 ×3天 → 考慮換（多賺 $3.00/日，換池成本 $13.30，4.4 天回本）
+Σ 昨日手續費 +$13.42 / 投入 $10170（0.13%/日，06:00→06:00）
 ```
 頭寸下的 ⚖️ 行是 D65 的換池提示（同股票 × USDG 池近 7 天 LP 實得費 ÷ TVL 的比較），只提示、不動作。
 

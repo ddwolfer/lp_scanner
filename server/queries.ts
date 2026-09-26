@@ -206,11 +206,19 @@ export function listPositions(db: Database.Database) {
         breakeven = { lower: be.lower, upper: be.upper, paceUsdPerDay: pace, paceBasis, feesEarnedUsd: earnedNow, feesReinvestedUsd: reinvested, priceNow: Pnow, capitalChanged: liqChangeDays.size > 0 }   // 加減倉後 deposit_usd 需人工確認（Codex review）
       }
     }
+    // D66：昨日手續費 = 最近兩筆快照之間「已賺總額」的差（未領 + 領過的）；只有一筆快照 → 從開倉起算
+    let feesLastDay: { usd: number; hours: number; from: string; to: string } | null = null
+    if (latest && !r.closed_at && notes?.source === 'onchain') {
+      const prev = snaps.length >= 2 ? snaps[snaps.length - 2] : null
+      const earnedAt = (sn: any) => sn.fees_cum_usd + collectedBy(sn)
+      const toIso = snapIso(latest); const fromIso = prev ? snapIso(prev) : r.opened_at
+      feesLastDay = { usd: earnedAt(latest) - (prev ? earnedAt(prev) : 0), hours: Math.max(0, (Date.parse(toIso) - Date.parse(fromIso)) / 3600000), from: fromIso, to: toIso }
+    }
     // D65：換池提示。只對持有中的頭寸；費速用保本線的 7 天 pace（沒有就 null，不判冷）
     let switchHintOut: SwitchHint | null = null
     if (!r.closed_at) { const { held: hs, alts } = poolSeries(db, r.pool_id, 7, cfgAll.exclusions.min_tvl_usd)
       if (hs) switchHintOut = switchHint({ held: hs, alts, depositUsd: r.deposit_usd, paceUsdPerDay: breakeven ? breakeven.paceUsdPerDay : null, heldDays: actual?.days ?? 0, inRange: actual ? actual.in_range : true, asOf: hs.days.length ? hs.days[hs.days.length - 1].date : taipeiDate(new Date()), cfg: { ...cfgAll.switch_hint, gas_usd_per_tx: econCfg.gas_usd_per_tx, lifecycle_txs: econCfg.lifecycle_txs, capacity_share: econCfg.capacity_share } }) }
-    return { ...r, notes_json: notes, journal, breakeven, switchHint: switchHintOut, est: simCap.length ? (() => { const e = simCap[simCap.length - 1]; const P = hours[hours.length - 1].priceUsd; return { value_usd: e.valueH, fees_cum_usd: e.grossFees, fees_reinvested_usd: e.reinvested, capital_usd: e.capital, in_range: P >= r.range_lower && P <= r.range_upper, net_usd: e.net, price: P, hours: simCap.length } })() : null,
+    return { ...r, notes_json: notes, journal, breakeven, switchHint: switchHintOut, feesLastDay, est: simCap.length ? (() => { const e = simCap[simCap.length - 1]; const P = hours[hours.length - 1].priceUsd; return { value_usd: e.valueH, fees_cum_usd: e.grossFees, fees_reinvested_usd: e.reinvested, capital_usd: e.capital, in_range: P >= r.range_lower && P <= r.range_upper, net_usd: e.net, price: P, hours: simCap.length } })() : null,
       actual, history, capitalMarks, feesWithdrawnUsd: withdrawnBy(latest ? snapIso(latest) : new Date().toISOString()), feesReinvestedUsd: reinvested, curve: simCap.map(e => ({ ts: e.ts, net: e.net })), final: finalSnap ? { value_usd: finalSnap.value_usd, fees_cum_usd: finalSnap.fees_cum_usd } : null }
   })
 }

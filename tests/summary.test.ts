@@ -27,7 +27,7 @@ it('有 topicId 時帶 message_thread_id', async () => {
   await sendTelegram('hi', { token: 'T', chatId: 'C', topicId: '42' }, f as any)
   expect(JSON.parse(f.mock.calls[0][1].body)).toMatchObject({ chat_id: 'C', message_thread_id: 42 })
 })
-import { formatPositions, shouldFetchSwaps } from '../scanner/run.js'
+import { formatPositions, shouldFetchSwaps, formatFeesTotal } from '../scanner/run.js'
 it('formatPositions 只列未關閉頭寸', () => {
   const rows = [
     { symbol: 'SOFI', label: '#1', closed_at: null, est: { net_usd: 18.4, hours: 168, in_range: true } },
@@ -52,4 +52,19 @@ it('shouldFetchSwaps：低費率池只為持有/觀察中的股票抓（D65）',
   expect(shouldFetchSwaps({ ...base, watched: false, feeOk: true, lowFee: false, tvl: 1500 })).toBe(true)   // 一般池照 D16
   expect(shouldFetchSwaps({ ...base, watched: true, feeOk: false, lowFee: false })).toBe(false)             // 費率過高的池不抓
   expect(shouldFetchSwaps({ ...base, watched: true, tvl: null })).toBe(false)
+})
+
+it('D66：昨日費附在頭寸行尾，合計行不加 bullet', () => {
+  const rows = [
+    { symbol: 'TSLA', label: '#1', closed_at: null, deposit_usd: 1056.92, actual: { fees_cum_usd: 23.99, value_usd: 1067.09, net_usd: 34.17, days: 15, in_range: true }, est: null, feesLastDay: { usd: 3.57, hours: 24.2, from: 'a', to: 'b' } },
+    { symbol: 'SPCX', label: '#2', closed_at: null, deposit_usd: 1953.8, actual: { fees_cum_usd: 1.29, value_usd: 1956.37, net_usd: 3.86, days: 2, in_range: true }, est: null, feesLastDay: { usd: 1.29, hours: 31, from: 'a', to: 'b' } },
+    { symbol: 'IBM', label: '#3', closed_at: '2026-09-01', deposit_usd: 100, actual: { fees_cum_usd: 1, value_usd: 100, net_usd: 1, days: 1, in_range: true }, est: null, feesLastDay: { usd: 9, hours: 24, from: 'a', to: 'b' } },
+  ] as any
+  const lines = formatPositions(rows)
+  expect(lines[0]).toMatch(/在區間 ✓  昨日費 \+\$3\.57$/)
+  expect(lines[1]).toMatch(/昨日費 \+\$1\.29 \(31h\)$/)
+  expect(formatFeesTotal(rows)).toBe('Σ 昨日手續費 +$4.86 / 投入 $3011（0.14%/日，28h）')   // 閉倉不算；平均 27.6h 偏離 24h > 3h → 印時數
+  expect(formatFeesTotal([rows[2]])).toBeNull()
+  const text = formatDailySummary({ date: 'd', weekdayZh: '一', poolsScanned: 1, candidates: 0, sortKey: 'd1000.r25', top: [], changes: [], positions: [...lines, formatFeesTotal(rows)!] })
+  expect(text).toContain('\nΣ 昨日手續費'); expect(text).not.toContain('- Σ')
 })

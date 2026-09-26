@@ -8,7 +8,13 @@ import { V3_NPM } from './sources/uniswapV3.js'
 import { syncPositions, writePositionSnapshot, setPositionOrigin, type PositionValuation } from './steps.js'
 import { exportPositions } from '../server/queries.js'
 
-export async function runPositionsStage(db: Database.Database, usage: ApiUsage, trackAddr: string, date: string, now: Date, log: (m: string) => void): Promise<PositionValuation[]> {
+export type SnapshotMode = 'force' | 'if_missing'
+/** D66：當天已有快照時要不要覆蓋。06:00 排程用 force（權威切點）；07:30 掃描與手動同步用 if_missing（只補缺的）；新頭寸一律寫 */
+export function shouldWriteSnapshot(db: Database.Database, positionId: number, date: string, isNew: boolean, mode: SnapshotMode): boolean {
+  if (mode === 'force' || isNew) return true
+  return !db.prepare('SELECT 1 FROM position_snapshots WHERE position_id=? AND date=?').get(positionId, date)
+}
+export async function runPositionsStage(db: Database.Database, usage: ApiUsage, trackAddr: string, date: string, now: Date, log: (m: string) => void, mode: SnapshotMode = 'if_missing'): Promise<PositionValuation[]> {
   const rpc = makeRpc({ usage })
   const stockMap = new Map((db.prepare(`SELECT address, symbol FROM tokens WHERE kind='stock'`).all() as { address: string; symbol: string }[]).map(t => [t.address, { tokenSymbol: t.symbol }]))
   const onchain = [...await fetchV4Positions(rpc, trackAddr, usage, process.env.ALCHEMY_KEY), ...await fetchV3Positions(rpc, trackAddr)]
@@ -28,7 +34,7 @@ export async function runPositionsStage(db: Database.Database, usage: ApiUsage, 
         log(`position ${v.label}: opened ${new Date(mint.ts * 1000).toISOString().slice(0, 16)} deposit $${deposit.toFixed(2)} @ ${price.toFixed(2)}`)
       }
     }
-    if (!v.closed || v.isNew) writePositionSnapshot(db, v.positionId, date, v)
+    if ((!v.closed || v.isNew) && shouldWriteSnapshot(db, v.positionId, date, v.isNew, mode)) writePositionSnapshot(db, v.positionId, date, v)
   }
   exportPositions(db, 'data/positions')
   log(`positions: ${onchain.length} onchain, ${vals.length} tracked (${vals.filter(v => v.isNew).length} new, ${vals.filter(v => v.closed).length} closed)`)
