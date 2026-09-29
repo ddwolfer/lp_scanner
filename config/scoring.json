@@ -24,7 +24,7 @@
     "swap_fetch_min_tvl_usd": 1000,
     "wash_sample_swaps": 800,
     "ref_max_spread_pct": 0.02,
-    "watch_symbols": []
+    "watch_symbols": ["MSFT"]
   },
   "switch_hint": {
     "ratio": 1.5,
