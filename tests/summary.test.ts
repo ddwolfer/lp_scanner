@@ -32,7 +32,7 @@ it('formatPositions 一行一個頭寸：標籤、天數、昨日費、換池結
   const rows = [
     { symbol: 'SOFI', label: '#1', closed_at: null, est: { net_usd: 18.4, hours: 168, in_range: true } },
     { symbol: 'MSTR', label: 'MSTR #2b', closed_at: null, deposit_usd: 645.45, actual: { fees_cum_usd: 3.87, value_usd: 655.71, net_usd: 14.13, days: 1, in_range: false, fees_withdrawn_usd: 0, fees_reinvested_usd: 0 }, est: null,
-      feesLastDay: { usd: 2.59, hours: 24, from: 'a', to: 'b' }, switchHint: { verdict: 'consider', best: { label: 'v4 ~0.15%' }, extraPerDay: 3.41, recoverDays: 1.8 } },
+      feesLastDay: { usd: 2.59, hours: 24, from: 'a', to: 'b' }, switchHint: { verdict: 'watch', heldDays: 5, altsPending: 0, best: { poolId: 'x', label: 'v4 動態', heldPerDay: 2, altPerDay: 3.2, extraPerDay: 1.2, daysAbove: 3, commonDays: 5, reasons: ['hook', '新池'] } } },
     { symbol: 'IBM', label: '#2', closed_at: '2026-09-01', est: { net_usd: -1, hours: 24, in_range: false } },
     { symbol: 'AMD', label: '#3', closed_at: null, est: null },
     { symbol: 'TSLA', label: 'TSLA #1233', closed_at: null, deposit_usd: 1056.92, actual: { fees_cum_usd: 24.04, value_usd: 1067.09, net_usd: 33.84, days: 16, in_range: true, fees_withdrawn_usd: 0, fees_reinvested_usd: 0 }, est: null,
@@ -42,7 +42,7 @@ it('formatPositions 一行一個頭寸：標籤、天數、昨日費、換池結
   ] as any
   expect(formatPositions(rows)).toEqual([
     'SOFI #1 (7d)  估算 +$18.40',
-    'MSTR #2b (1d)  昨日費 +$2.59  ✗ 出區間  ⚖️ 考慮換 → v4 ~0.15%（多賺 $3.41/日，1.8 天回本）',
+    'MSTR #2b (1d)  昨日費 +$2.59  ✗ 出區間  ⚖️ 觀察 → v4 動態⚠️hook·新池（你的區間重放多 $1.20/日）',
     'AMD #3  無小時資料',
     'TSLA #1233 (16d)  昨日費 +$3.20 (31h)  ⚖️ 留',
     'GOOGL #7005 (3d)  昨日費 +$1.26  ⚖️ 待累積',

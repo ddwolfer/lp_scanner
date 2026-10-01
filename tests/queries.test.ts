@@ -115,7 +115,21 @@ it('D65：費率低於下限而被排除的池，頭寸模擬與換池提示仍�
   expect(s.held!.days.map(d => d.date)).toEqual(['2026-09-30', '2026-10-01'])   // 只取最新快照日往回 7 個日曆日，不是最近 7 筆
   expect(s.held!.days.map(d => d.ok)).toEqual([true, false])
   expect(poolSeries(db, '0x3', 40, 5000).held!.days.map(d => d.ok)).toEqual([false, false, true, true, true, false])
-  expect(p.switchHint!.validDays).toBe(1); expect(p.switchHint!.verdict).toBe('no_data')   // 7 個日曆日內自己只有 1 個有效日
+  expect(p.switchHint!.heldDays).toBe(1); expect(p.switchHint!.verdict).toBe('no_data')   // 視窗內自己只有 1 個資料完整的交易日
+})
+it('D67：換池提示用頭寸區間在兩池逐小時重放，只比交易日；穩定且多賺 → 考慮換', () => {
+  const db = seed()
+  db.prepare(`UPDATE pools SET hook_kind='none'`).run()
+  const base = { is_weekday: 1, tvl_usd: 1_000_000, volume_24h_usd: 1000, fees_24h_usd: 3, price_usd: 10, price_ref_usd: 10, price_dev_pct: 0, swap_count: 5, age_days: 50, vol7_avg_usd: 0, vol7_cv: 0, raw_apr: 0, excluded: 0, flags: [] as string[] }
+  for (const d of ['2026-09-23', '2026-09-24', '2026-09-25', '2026-09-26', '2026-09-27']) for (const pid of ['0x1', '0x2']) writeSnapshot(db, { ...base, pool_id: pid, date: d })
+  // UTC 09-22（二）到 09-26（六）每天 3 小時；0x2 每小時費是 0x1 的兩倍；週六那天不算
+  const hrs = (fee: number) => ['2026-09-22', '2026-09-23', '2026-09-24', '2026-09-25', '2026-09-26'].flatMap(d => [1, 2, 3].map(h => ({ ts: Date.parse(`${d}T0${h}:00:00Z`) / 1000, priceUsd: 10, volumeUsd: 100, feesUsd: fee, liquidity: '1', swapCount: 1 })))
+  writeHourly(db, '0x1', hrs(1)); writeHourly(db, '0x2', hrs(2))
+  createPosition(db, { pool_id: '0x1', label: 'held', range_lower: 7.5, range_upper: 12.5, deposit_usd: 1000, opened_at: '2026-09-20T00:00:00Z' })
+  const h = listPositions(db)[0].switchHint!
+  expect(h.heldDays).toBe(4)                                  // 快照 09-23..09-26 → UTC 09-22..09-25 交易日；09-27 快照對應週六
+  expect(h.verdict).toBe('consider'); expect(h.best!.poolId).toBe('0x2')
+  expect(h.best!.altPerDay / h.best!.heldPerDay).toBeCloseTo(2, 2); expect(h.best!.reasons).toEqual([])
 })
 
 it('D66：feesLastDay 取最近兩筆快照的已賺差（領過的加回）；只有一筆從開倉算；shouldWriteSnapshot 的 if_missing/force', () => {

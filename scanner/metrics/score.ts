@@ -18,12 +18,12 @@ export function scorePools(rows: ScoreInput[], s: Scoring): Map<string, number> 
   const w = s.weights; const out = new Map<string, number>()
   for (const r of withSim) {
     const inRange = getSimField(r.sim, s.sort_key, 'in_range_pct') ?? 0
-    const dev = r.priceDevPct === null ? 0.05 : Math.abs(r.priceDevPct)
+    const dev = r.priceDevPct === null ? 0.025 : Math.abs(r.priceDevPct)   // D67：沒有參考價（週末報價價差過大被捨棄、API 失敗）給中性分，不再當最差（MSTR 週末因此掉到 141 名）
     out.set(r.poolId,
       w.net_apr * rank.get(r.poolId)! +
       w.in_range_pct * inRange +
       w.vol7_cv * (r.vol7Cv === null ? 0.5 : 1 - clamp(r.vol7Cv, 0, 2) / 2) +   // 無 CV → 中性
-      w.trader_count * clamp((r.traderCount ?? 0) / 50, 0, 1) +
+      w.trader_count * (r.traderCount === null ? 0.5 : clamp(r.traderCount / 50, 0, 1)) +   // D67：交易者數只對前 N 名抓，其餘沒資料給中性分（原本當 0 人，排名低的池永遠拿不到）
       w.price_dev * (1 - clamp(dev, 0, 0.05) / 0.05) +
       w.all_day_tradable * (r.allDayTradable ? 1 : 0))
   }

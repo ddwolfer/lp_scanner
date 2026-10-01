@@ -259,9 +259,7 @@ export function formatPositions(list: ReturnType<typeof listPositions>): string[
     const label = p.label.includes(p.symbol) ? p.label : `${p.symbol} ${p.label}`
     if (!p.actual) return p.est ? `${label} (${days}d)  估算 ${money(p.est.net_usd)}${p.est.in_range ? '' : '  ✗ 出區間'}` : `${label}  無小時資料`
     const lastDay = p.feesLastDay ? `  昨日費 ${money(p.feesLastDay.usd)}${Math.abs(p.feesLastDay.hours - 24) > 3 ? ` (${Math.round(p.feesLastDay.hours)}h)` : ''}` : ''   // 時數偏離 24h 超過 3 小時才標
-    const h = p.switchHint
-    const hint = !h ? '' : h.verdict === 'consider' && h.best ? `  ⚖️ 考慮換 → ${h.best.label}（多賺 $${(h.extraPerDay as number).toFixed(2)}/日，${(h.recoverDays as number).toFixed(1)} 天回本）`
-      : h.verdict === 'cold' ? '  ⚖️ 量已冷' : h.verdict === 'no_data' ? '  ⚖️ 待累積' : '  ⚖️ 留'
+    const hint = p.switchHint ? '  ' + formatSwitchHint(p.switchHint) : ''   // D67：考慮換 / 觀察 / 留 / 量已冷 / 待累積
     return `${label} (${days}d)${lastDay}${p.actual.in_range ? '' : '  ✗ 出區間'}${hint}`
   })
 }

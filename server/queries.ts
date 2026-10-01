@@ -8,7 +8,9 @@ import { lifecycleCost, capacityUsd, volumePersistence, exitBreakeven } from '..
 import { L_HUMAN_TO_RAW } from '../scanner/metrics/lp-math.js'
 import { taipeiDate } from '../scanner/time.js'
 import { loadScoring } from '../config/chain.js'
-import { switchHint, type PoolSeries, type SwitchHint } from '../scanner/metrics/poolSwitch.js'
+import { switchHint, replayDaily, weekdayPace, snapshotToUtcDay, type SwitchHint, type AltPool } from '../scanner/metrics/poolSwitch.js'
+/** 一個池最近幾天的快照摘要（D65/D67）：ok=false 的日子（沒抓、抓失敗、總費口徑）不能拿來比 */
+export interface PoolSeries { poolId: string; label: string; swapFeeRate: number; hookKind: 'none' | 'fee_only' | 'liquidity'; createdAt: string | null; days: { date: string; feesUsd: number; tvlUsd: number | null; ok: boolean }[] }
 
 const POOL_JOIN = `FROM pool_snapshots s JOIN pools p ON p.pool_id = s.pool_id
   JOIN tokens t ON t.address = CASE WHEN p.stock_is_token0 = 1 THEN p.token0 ELSE p.token1 END`
@@ -93,7 +95,7 @@ const D65_FLAG_SINCE = '2026-09-26'   // swap_not_fetched 旗標開始寫入的�
 export function poolSeries(db: Database.Database, poolId: string, n = 7, minTvl = 5000): { held: PoolSeries | null; alts: PoolSeries[] } {
   const me = db.prepare('SELECT * FROM pools WHERE pool_id=?').get(poolId) as any; if (!me) return { held: null, alts: [] }
   const stock = me.stock_is_token0 ? me.token0 : me.token1
-  const rows = db.prepare(`SELECT p.pool_id, p.protocol, p.fee_ppm, p.hook_kind, p.hooks FROM pools p WHERE (CASE WHEN p.stock_is_token0=1 THEN p.token0 ELSE p.token1 END)=? AND COALESCE(p.quote_kind,'usdg')='usdg'`).all(stock) as any[]
+  const rows = db.prepare(`SELECT p.pool_id, p.protocol, p.fee_ppm, p.hook_kind, p.hooks, p.created_at FROM pools p WHERE (CASE WHEN p.stock_is_token0=1 THEN p.token0 ELSE p.token1 END)=? AND COALESCE(p.quote_kind,'usdg')='usdg'`).all(stock) as any[]
   // 以自己最新快照日往回 n 個日曆日為共同截止，不是「最近 n 筆」：漏掃後幾週前的高量日才不會留在平均裡（Codex code review）
   const latestDate = (db.prepare('SELECT MAX(date) d FROM pool_snapshots WHERE pool_id=?').get(poolId) as { d: string | null }).d
   if (!latestDate) return { held: null, alts: [] }
@@ -107,7 +109,7 @@ export function poolSeries(db: Database.Database, poolId: string, n = 7, minTvl 
     const observed = [...snaps].reverse().find(x => x.fee_ppm_observed !== null)?.fee_ppm_observed ?? null
     const feePpm = observed ?? p.fee_ppm ?? 3000
     const label = `${p.protocol} ${p.fee_ppm !== null ? (p.fee_ppm / 1e4).toFixed(2) + '%' : observed !== null ? '~' + (observed / 1e4).toFixed(2) + '%' : '動態'}`
-    return { poolId: p.pool_id, label, swapFeeRate: feePpm / 1e6, days: snaps.map(x => { const flags: string[] = (() => { try { return JSON.parse(x.flags ?? '[]') } catch { return [] } })()
+    return { poolId: p.pool_id, label, swapFeeRate: feePpm / 1e6, hookKind, createdAt: p.created_at ?? null, days: snaps.map(x => { const flags: string[] = (() => { try { return JSON.parse(x.flags ?? '[]') } catch { return [] } })()
       // 沒抓 swap 的日子不能當成「費率 0」：新快照有 swap_not_fetched 旗標；D65 之前的舊快照沒有旗標，低費率池（fee_out_of_range）swap_count=0 就視為沒抓。抓了但整天沒成交算有效的零收益日（Codex plan review）
       const legacyUnfetched = x.date < D65_FLAG_SINCE && !flags.includes('swap_not_fetched') && flags.includes('fee_out_of_range') && (x.swap_count ?? 0) === 0   // 只套用在旗標上線前的快照；之後「抓了沒成交」是有效的零收益日（Codex code review）
       return { date: x.date, feesUsd: x.fees_24h_usd ?? 0, tvlUsd: x.tvl_usd, ok: !flags.includes('swap_fetch_failed') && !flags.includes('swap_not_fetched') && !flags.includes('protocol_fee_unknown') && !legacyUnfetched } }) }   // protocol_fee_unknown 那天存的是交易者總費，不能和 LP 實得互比（Codex code review）
@@ -215,9 +217,21 @@ export function listPositions(db: Database.Database) {
       feesLastDay = { usd: earnedAt(latest) - (prev ? earnedAt(prev) : 0), hours: Math.max(0, (Date.parse(toIso) - Date.parse(fromIso)) / 3600000), from: fromIso, to: toIso }
     }
     // D65：換池提示。只對持有中的頭寸；費速用保本線的 7 天 pace（沒有就 null，不判冷）
+    // D67：用這個頭寸的區間與目前投入，在自己的池和同股票各池的逐小時資料上重放，只比美股交易日、兩邊資料都完整的同一批日子
     let switchHintOut: SwitchHint | null = null
-    if (!r.closed_at) { const { held: hs, alts } = poolSeries(db, r.pool_id, 7, cfgAll.exclusions.min_tvl_usd)
-      if (hs) switchHintOut = switchHint({ held: hs, alts, depositUsd: r.deposit_usd, paceUsdPerDay: breakeven ? breakeven.paceUsdPerDay : null, heldDays: actual?.days ?? 0, inRange: actual ? actual.in_range : true, asOf: hs.days.length ? hs.days[hs.days.length - 1].date : taipeiDate(new Date()), cfg: { ...cfgAll.switch_hint, gas_usd_per_tx: econCfg.gas_usd_per_tx, lifecycle_txs: econCfg.lifecycle_txs, capacity_share: econCfg.capacity_share } }) }
+    if (!r.closed_at) { const { held: hs, alts } = poolSeries(db, r.pool_id, 8, cfgAll.exclusions.min_tvl_usd)
+      if (hs) {
+        const cap = actual?.capital_usd ?? r.deposit_usd
+        const validUtc = (ps: PoolSeries) => new Set(ps.days.filter(d => d.ok).map(d => snapshotToUtcDay(d.date)))
+        const replay = (ps: PoolSeries) => replayDaily(loadHourly(db, ps.poolId, 24 * 9), cap, r.range_lower, r.range_upper, validUtc(ps))
+        const asOf = hs.days.length ? hs.days[hs.days.length - 1].date : null
+        const altPools: AltPool[] = alts.filter(a => a.hookKind !== 'liquidity').map(a => { const tv = a.days.map(d => d.tvlUsd).filter((x): x is number => x !== null)
+          return { poolId: a.poolId, label: a.hookKind === 'fee_only' ? a.label.replace(/~[\d.]+%|動態/, '動態') : a.label, hookKind: a.hookKind as 'none' | 'fee_only',
+            ageDays: a.createdAt && asOf ? (Date.parse(asOf) - Date.parse(a.createdAt.slice(0, 10))) / 86400000 : null,
+            tvlNow: tv.length ? tv[tv.length - 1] : null, tvlMin7: tv.length ? Math.min(...tv) : null, tvlMax7: tv.length ? Math.max(...tv) : null, daily: replay(a) } })
+        const wp = weekdayPace(snaps.map(sn => ({ date: sn.date, earned: sn.fees_cum_usd + collectedBy(sn) })))
+        switchHintOut = switchHint({ held: replay(hs), alts: altPools, depositUsd: cap, weekdayPace: wp.pace, tradingDaysHeld: wp.days, inRange: actual ? actual.in_range : true, cfg: cfgAll.switch_hint })
+      } }
     return { ...r, notes_json: notes, journal, breakeven, switchHint: switchHintOut, feesLastDay, est: simCap.length ? (() => { const e = simCap[simCap.length - 1]; const P = hours[hours.length - 1].priceUsd; return { value_usd: e.valueH, fees_cum_usd: e.grossFees, fees_reinvested_usd: e.reinvested, capital_usd: e.capital, in_range: P >= r.range_lower && P <= r.range_upper, net_usd: e.net, price: P, hours: simCap.length } })() : null,
       actual, history, capitalMarks, feesWithdrawnUsd: withdrawnBy(latest ? snapIso(latest) : new Date().toISOString()), feesReinvestedUsd: reinvested, curve: simCap.map(e => ({ ts: e.ts, net: e.net })), final: finalSnap ? { value_usd: finalSnap.value_usd, fees_cum_usd: finalSnap.fees_cum_usd } : null }
   })

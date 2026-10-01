@@ -27,14 +27,17 @@
     "watch_symbols": ["MSFT"]
   },
   "switch_hint": {
-    "ratio": 1.5,
+    "ratio": 1.3,
     "days": 3,
-    "recover_days_max": 14,
+    "min_extra_usd": 0.5,
+    "min_age_days": 14,
+    "tvl_multiple": 20,
+    "tvl_stability": 0.5,
     "cold_usd_per_day": 1,
     "cold_min_days": 5
   },
   "economics": {
-    "gas_usd_per_tx": 0.2,
+    "gas_usd_per_tx": 0.05,
     "lifecycle_txs": 4,
     "capacity_share": 0.1
   }
