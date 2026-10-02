@@ -21,12 +21,13 @@ export interface AltResult { poolId: string; label: string; heldPerDay: number; 
 export interface SwitchHint { verdict: SwitchVerdict; heldDays: number; best: AltResult | null; altsPending: number }
 
 const mean = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / xs.length
+/** 裝得下：最新 TVL ≥ 投入 × tvl_multiple。裝不下的池不列入比較（D67 修正：小池重放會讓你拿走整池大半的費，數字誤導，10/2 MSTR 3% 池 TVL $1.1 萬卻顯示多 $8/日） */
+export const fitsPool = (a: AltPool, depositUsd: number, cfg: SwitchCfg) => a.tvlNow !== null && a.tvlNow >= depositUsd * cfg.tvl_multiple
 /** 替代池不夠穩的原因；空陣列 = 穩，可以說「考慮換」 */
 export function stabilityReasons(a: AltPool, depositUsd: number, cfg: SwitchCfg): string[] {
   const r: string[] = []
   if (a.hookKind !== 'none') r.push('hook')
   if (a.ageDays === null || a.ageDays < cfg.min_age_days) r.push('新池')
-  if (a.tvlNow === null || a.tvlNow < depositUsd * cfg.tvl_multiple) r.push('TVL小')
   if (a.tvlMin7 === null || a.tvlMax7 === null || a.tvlMax7 <= 0 || a.tvlMin7 < a.tvlMax7 * cfg.tvl_stability) r.push('TVL不穩')
   return r
 }
@@ -41,7 +42,7 @@ export function compareAlt(held: DailyReplay, a: AltPool, depositUsd: number, cf
 export function switchHint(i: SwitchInput): SwitchHint {
   const heldDays = i.held.size
   if (heldDays < i.cfg.days) return { verdict: 'no_data', heldDays, best: null, altsPending: 0 }
-  const results = i.alts.map(a => compareAlt(i.held, a, i.depositUsd, i.cfg))
+  const results = i.alts.filter(a => fitsPool(a, i.depositUsd, i.cfg)).map(a => compareAlt(i.held, a, i.depositUsd, i.cfg))
   const altsPending = results.filter(r => r === null).length
   const ok = results.filter((r): r is AltResult => r !== null)
   // 候選：同一批交易日裡至少 cfg.days 天 ≥ ratio 倍，且平均每天多 ≥ min_extra_usd

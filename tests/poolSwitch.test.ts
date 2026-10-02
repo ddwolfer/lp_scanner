@@ -13,12 +13,16 @@ describe('poolSwitch D67', () => {
     expect(h.verdict).toBe('consider'); expect(h.best).toMatchObject({ poolId: 'a', extraPerDay: 1, daysAbove: 5, commonDays: 5 })
     expect(formatSwitchHint(h)).toBe('⚖️ 考慮換 → a（你的區間重放多 $1.00/日）')
   })
-  it('hook / 新池 / TVL 小 / TVL 不穩 → 只能 watch，並列出原因', () => {
+  it('裝不下的小池（TVL < 投入 × 20）完全不列入比較，不會顯示觀察', () => {
+    const tiny = alt('tiny', [11, 11, 11, 11, 11], { tvlNow: 11_000, tvlMin7: 10_000, tvlMax7: 12_000 })
+    const h = switchHint({ ...base, alts: [tiny] })
+    expect(h.verdict).toBe('stay'); expect(h.best).toBeNull(); expect(formatSwitchHint(h)).toBe('⚖️ 留')
+  })
+  it('hook / 新池 / TVL 不穩 → 只能 watch，並列出原因', () => {
     const a = alt('fables', [4, 4, 4, 4, 4], { hookKind: 'fee_only', ageDays: 11, tvlNow: 76_000, tvlMin7: 3_000, tvlMax7: 114_000 })
     expect(stabilityReasons(a, 2000, cfg)).toEqual(['hook', '新池', 'TVL不穩'])
     const h = switchHint({ ...base, alts: [a] })
     expect(h.verdict).toBe('watch'); expect(formatSwitchHint(h)).toBe('⚖️ 觀察 → fables⚠️hook·新池·TVL不穩（你的區間重放多 $2.00/日）')
-    expect(stabilityReasons(alt('x', [1], { tvlNow: 30_000 }), 2000, cfg)).toEqual(['TVL小'])   // 2000 × 20 = 40,000
   })
   it('穩定池優先於多賺更多但不穩的池', () => {
     const h = switchHint({ ...base, alts: [alt('wild', [9, 9, 9, 9, 9], { hookKind: 'fee_only' }), alt('calm', [3, 3, 3, 3, 3])] })
