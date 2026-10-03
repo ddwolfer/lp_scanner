@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis, Legend, ReferenceLine } from 'recharts'
 import { api, fmtNum, fmtUsd } from '../api'
+import WeeklyFees from '../components/WeeklyFees'
 export default function Positions() {
   const [list, setList] = useState<any[]>([]); const [err, setErr] = useState('')
   const [f, setF] = useState({ pool_id: '', label: '', range_lower: '', range_upper: '', deposit_usd: '', opened_at: new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16), notes: '' })
@@ -32,6 +33,7 @@ export default function Positions() {
   const KINDS: [string, string][] = [['open', '開倉理由'], ['note', '筆記'], ['adjust', '調整'], ['collect', '領手續費'], ['close', '關倉'], ['review', '檢討']]
   const tsFmt = (t: number) => new Date(t * 1000).toISOString().slice(5, 16).replace('T', ' ')
   return <>
+    <WeeklyFees reloadToken={list} />
     <h2>登錄頭寸</h2>
     <form className="pos-form card" onSubmit={submit}>
       <label>pool_id<input required value={f.pool_id} onChange={e => setF({ ...f, pool_id: e.target.value })} placeholder="0x…" /></label>

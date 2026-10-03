@@ -1,6 +1,7 @@
 // server/api.ts — /api 路由。唯一寫入是頭寸登錄與關閉（SPEC §9.3）
 import type { FastifyInstance } from 'fastify'
 import type Database from 'better-sqlite3'
+import { weeklyFees } from '../scanner/metrics/weeklyFees.js'
 import { z } from 'zod'
 import { getDates, getOverview, getPool, listPositions, createPosition, closePosition, addJournal, exportPositions, positionKey } from './queries.js'
 import { loadScoring } from '../config/chain.js'
@@ -23,6 +24,7 @@ export function registerApi(app: FastifyInstance, db: Database.Database) {
     const r = getPool(db, req.params.id.toLowerCase()); if (!r) return reply.code(404).send({ error: 'pool not found' }); return r
   })
   app.get('/api/positions', async () => listPositions(db))
+  app.get('/api/fees/weekly', async () => weeklyFees(listPositions(db).map(p => ({ id: p.id, label: p.label, depositUsd: p.deposit_usd, dailyFees: p.dailyFees }))))   // D68
   app.post('/api/positions', async (req, reply) => {
     const p = PositionSchema.safeParse(req.body); if (!p.success) return reply.code(400).send({ error: p.error.flatten() })
     return { id: createPosition(db, p.data) }

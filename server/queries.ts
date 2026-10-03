@@ -208,6 +208,9 @@ export function listPositions(db: Database.Database) {
         breakeven = { lower: be.lower, upper: be.upper, paceUsdPerDay: pace, paceBasis, feesEarnedUsd: earnedNow, feesReinvestedUsd: reinvested, priceNow: Pnow, capitalChanged: liqChangeDays.size > 0 }   // 加減倉後 deposit_usd 需人工確認（Codex review）
       }
     }
+    // D68：每筆快照與前一筆之間的已賺手續費（未領 + 領過的），第一筆從開倉起算；給每週彙整用
+    const earnedOf = (sn: any) => sn.fees_cum_usd + collectedBy(sn)
+    const dailyFees = notes?.source === 'onchain' ? snaps.map((sn, k) => ({ date: sn.date, usd: earnedOf(sn) - (k ? earnedOf(snaps[k - 1]) : 0), capitalUsd: capitalAt(snapIso(sn)) })) : []   // 當時的投入，加減倉後歷史週不會被改寫（Codex review）
     // D66：昨日手續費 = 最近兩筆快照之間「已賺總額」的差（未領 + 領過的）；只有一筆快照 → 從開倉起算
     let feesLastDay: { usd: number; hours: number; from: string; to: string } | null = null
     if (latest && !r.closed_at && notes?.source === 'onchain') {
@@ -232,7 +235,7 @@ export function listPositions(db: Database.Database) {
         const wp = weekdayPace(snaps.map(sn => ({ date: sn.date, earned: sn.fees_cum_usd + collectedBy(sn) })))
         switchHintOut = switchHint({ held: replay(hs), alts: altPools, depositUsd: cap, weekdayPace: wp.pace, tradingDaysHeld: wp.days, inRange: actual ? actual.in_range : true, cfg: cfgAll.switch_hint })
       } }
-    return { ...r, notes_json: notes, journal, breakeven, switchHint: switchHintOut, feesLastDay, est: simCap.length ? (() => { const e = simCap[simCap.length - 1]; const P = hours[hours.length - 1].priceUsd; return { value_usd: e.valueH, fees_cum_usd: e.grossFees, fees_reinvested_usd: e.reinvested, capital_usd: e.capital, in_range: P >= r.range_lower && P <= r.range_upper, net_usd: e.net, price: P, hours: simCap.length } })() : null,
+    return { ...r, notes_json: notes, journal, breakeven, switchHint: switchHintOut, feesLastDay, dailyFees, est: simCap.length ? (() => { const e = simCap[simCap.length - 1]; const P = hours[hours.length - 1].priceUsd; return { value_usd: e.valueH, fees_cum_usd: e.grossFees, fees_reinvested_usd: e.reinvested, capital_usd: e.capital, in_range: P >= r.range_lower && P <= r.range_upper, net_usd: e.net, price: P, hours: simCap.length } })() : null,
       actual, history, capitalMarks, feesWithdrawnUsd: withdrawnBy(latest ? snapIso(latest) : new Date().toISOString()), feesReinvestedUsd: reinvested, curve: simCap.map(e => ({ ts: e.ts, net: e.net })), final: finalSnap ? { value_usd: finalSnap.value_usd, fees_cum_usd: finalSnap.fees_cum_usd } : null }
   })
 }
