@@ -27,3 +27,13 @@ it('weeklyFees：同名頭寸用 id 分開；歷史週用當時的投入', () =>
   expect(w.byPos.map(x => x.id)).toEqual([2, 1]); expect(w.days[0].byPos).toHaveLength(2)
   expect(w.capital).toBe(1500)
 })
+
+import { feeDelta } from '../scanner/metrics/weeklyFees.js'
+it('feeDelta：有代幣數量時只算新增數量，舊的未領股票漲價不算收入；領取後退回美元差', () => {
+  const a = { fees_cum_usd: 100, fees_stock: 1, fees_usdg: 0, price_usd: 100, collected: 0 }
+  expect(feeDelta(a, { fees_cum_usd: 110, fees_stock: 1, fees_usdg: 0, price_usd: 110, collected: 0 })).toBe(0)        // 只是股價漲
+  expect(feeDelta(a, { fees_cum_usd: 112.2, fees_stock: 1.02, fees_usdg: 0, price_usd: 110, collected: 0 })).toBeCloseTo(2.2)
+  expect(feeDelta(a, { fees_cum_usd: 3, fees_stock: 0.01, fees_usdg: 2, price_usd: 100, collected: 100 })).toBeCloseTo(3)   // 領走 $100 → 美元差 (3+100)−100
+  expect(feeDelta({ ...a, fees_stock: null }, { fees_cum_usd: 105, fees_stock: 1, fees_usdg: 0, price_usd: 105, collected: 0 })).toBe(5)   // 舊快照沒數量 → 美元差
+  expect(feeDelta(null, { fees_cum_usd: 4, fees_stock: null, fees_usdg: null, price_usd: null, collected: 1 })).toBe(5)
+})

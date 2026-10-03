@@ -155,3 +155,14 @@ it('D66：feesLastDay 取最近兩筆快照的已賺差（領過的加回）；�
   writePositionSnapshot(db, id, '2026-09-05', { valueUsd: 1, feesUsd: 1, inRange: true })
   expect(db.prepare('SELECT taken_at FROM position_snapshots WHERE position_id=? AND date=?').get(id, '2026-09-05')).toBeTruthy()
 })
+
+it('dailyFees 的 capHours 在加倉時點切段；liveBasis 用現在的投入', () => {
+  const db = seed()
+  const id = createPosition(db, { pool_id: '0x1', label: 'cap', range_lower: 7.5, range_upper: 12.5, deposit_usd: 10000, opened_at: '2026-09-01T00:00:00Z' })
+  db.prepare(`UPDATE positions SET notes=? WHERE id=?`).run(JSON.stringify({ source: 'onchain', tokenId: '9' }), id)
+  addJournal(db, id, 'adjust', '加倉', { cash_added_usd: 9000 }); db.prepare(`UPDATE position_journal SET ts=? WHERE position_id=?`).run('2026-09-01T23:00:00Z', id)
+  db.prepare(`INSERT INTO position_snapshots(position_id,date,value_usd,fees_cum_usd,in_range,taken_at) VALUES (?,?,?,?,1,?)`).run(id, '2026-09-02', 10000, 3, '2026-09-02T00:00:00Z')
+  const p = listPositions(db)[0] as any
+  expect(p.dailyFees[0].capHours).toBeCloseTo(1000 * 23 + 10000 * 1)
+  expect(p.liveBasis.capital_usd).toBe(10000)
+})

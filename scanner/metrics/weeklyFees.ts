@@ -33,3 +33,15 @@ export function weeklyFees(list: PosFees[]): Week[] {
   for (const [ws, w] of weeks) { w.days.sort((a, b) => a.usDay.localeCompare(b.usDay)); w.byPos.sort((a, b) => b.usd - a.usd); w.capital = Math.max(0, ...[...(cap.get(ws)?.values() ?? [])].map(m => [...m.values()].reduce((a, b) => a + b, 0))) }
   return [...weeks.values()].sort((a, b) => b.weekStart.localeCompare(a.weekStart))
 }
+
+/** D69：兩筆快照之間新賺的手續費。兩筆都有代幣數量且沒有領取（兩邊數量都沒減少）→ 用數量增量以後一筆的股價估值，
+ *  不會把「舊的未領股票因股價漲跌」算成收入；否則退回美元差（含領取金額加回）。 */
+export interface FeeSnap { fees_cum_usd: number; fees_stock: number | null; fees_usdg: number | null; price_usd: number | null; collected: number }
+export function feeDelta(prev: FeeSnap | null, cur: FeeSnap): number {
+  if (!prev) return cur.fees_cum_usd + cur.collected
+  const eps = 1e-12
+  if (prev.fees_stock !== null && prev.fees_usdg !== null && cur.fees_stock !== null && cur.fees_usdg !== null && cur.price_usd !== null
+      && cur.fees_stock >= prev.fees_stock - eps && cur.fees_usdg >= prev.fees_usdg - eps && cur.collected === prev.collected)
+    return (cur.fees_stock - prev.fees_stock) * cur.price_usd + (cur.fees_usdg - prev.fees_usdg)
+  return (cur.fees_cum_usd + cur.collected) - (prev.fees_cum_usd + prev.collected)
+}

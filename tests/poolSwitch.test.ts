@@ -18,8 +18,12 @@ describe('poolSwitch D67', () => {
     const h = switchHint({ ...base, alts: [tiny] })
     expect(h.verdict).toBe('stay'); expect(h.best).toBeNull(); expect(formatSwitchHint(h)).toBe('⚖️ 留')
   })
+  it('裝不裝得下看 7 天內最低 TVL，當天剛變大不算', () => {
+    const jumped = alt('j', [5, 5, 5, 5, 5], { tvlNow: 53_000, tvlMin7: 36_600, tvlMax7: 53_000 })   // 2000 × 20 = 40,000
+    expect(switchHint({ ...base, alts: [jumped] }).verdict).toBe('stay')
+  })
   it('hook / 新池 / TVL 不穩 → 只能 watch，並列出原因', () => {
-    const a = alt('fables', [4, 4, 4, 4, 4], { hookKind: 'fee_only', ageDays: 11, tvlNow: 76_000, tvlMin7: 3_000, tvlMax7: 114_000 })
+    const a = alt('fables', [4, 4, 4, 4, 4], { hookKind: 'fee_only', ageDays: 11, tvlNow: 76_000, tvlMin7: 50_000, tvlMax7: 114_000 })   // 最低仍裝得下，但起伏超過一半
     expect(stabilityReasons(a, 2000, cfg)).toEqual(['hook', '新池', 'TVL不穩'])
     const h = switchHint({ ...base, alts: [a] })
     expect(h.verdict).toBe('watch'); expect(formatSwitchHint(h)).toBe('⚖️ 觀察 → fables⚠️hook·新池·TVL不穩（你的區間重放多 $2.00/日）')

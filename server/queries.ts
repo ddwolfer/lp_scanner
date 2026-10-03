@@ -8,6 +8,7 @@ import { lifecycleCost, capacityUsd, volumePersistence, exitBreakeven } from '..
 import { L_HUMAN_TO_RAW } from '../scanner/metrics/lp-math.js'
 import { taipeiDate } from '../scanner/time.js'
 import { loadScoring } from '../config/chain.js'
+import { feeDelta } from '../scanner/metrics/weeklyFees.js'
 import { switchHint, replayDaily, weekdayPace, snapshotToUtcDay, type SwitchHint, type AltPool } from '../scanner/metrics/poolSwitch.js'
 /** 一個池最近幾天的快照摘要（D65/D67）：ok=false 的日子（沒抓、抓失敗、總費口徑）不能拿來比 */
 export interface PoolSeries { poolId: string; label: string; swapFeeRate: number; hookKind: 'none' | 'fee_only' | 'liquidity'; createdAt: string | null; days: { date: string; feesUsd: number; tvlUsd: number | null; ok: boolean }[] }
@@ -177,6 +178,13 @@ export function listPositions(db: Database.Database) {
     // D62：投入時間軸。adjust 日誌的 cash_added_usd 是帶正負號的外部本金淨流入（再投入的費不算）；某時點的投入 = 目前 deposit_usd − 該時點之後的流入
     const flows = journal.filter(j => j.kind === 'adjust' && j.data && j.data.cash_added_usd !== undefined).map(j => ({ ts: String(j.ts), usd: Number(j.data.cash_added_usd) }))
     const capitalAt = (iso: string) => r.deposit_usd - flows.filter(f => Date.parse(f.ts) > Date.parse(iso)).reduce((a, f) => a + f.usd, 0)
+    /** 區間內的「投入 × 小時」：在加減倉時點切段，不是拿區間結束時的投入乘整段（Codex review D69） */
+    const capitalHours = (fromIso: string, toIso: string) => {
+      const a = Date.parse(fromIso), b = Date.parse(toIso); if (!(b > a)) return 0
+      const cuts = [a, ...flows.map(f => Date.parse(f.ts)).filter(t => t > a && t < b).sort((x, y) => x - y), b]
+      let sum = 0; for (let k = 1; k < cuts.length; k++) sum += capitalAt(new Date(cuts[k - 1]).toISOString()) * (cuts[k] - cuts[k - 1]) / 3600000
+      return sum
+    }
     const effReinvestTs = (e: { ts: string; reinvestTs?: string }) => Math.max(Date.parse(e.ts), Date.parse(e.reinvestTs ?? e.ts))   // 再投入不可能早於領取；日誌時間誤填時以領取時間為準（Codex review）
     const withdrawnBy = (iso: string) => events.reduce((a, e) => a + (Date.parse(e.ts) <= Date.parse(iso) ? e.usd : 0) - (e.reinvested > 0 && effReinvestTs(e) <= Date.parse(iso) ? e.reinvested : 0), 0)   // 領出在領取時生效、再投入在存回時扣
     const snapIso = (sn: any) => sn.taken_at ?? (sn.date + 'T23:59:59+08:00')
@@ -209,15 +217,17 @@ export function listPositions(db: Database.Database) {
       }
     }
     // D68：每筆快照與前一筆之間的已賺手續費（未領 + 領過的），第一筆從開倉起算；給每週彙整用
-    const earnedOf = (sn: any) => sn.fees_cum_usd + collectedBy(sn)
-    const dailyFees = notes?.source === 'onchain' ? snaps.map((sn, k) => ({ date: sn.date, usd: earnedOf(sn) - (k ? earnedOf(snaps[k - 1]) : 0), capitalUsd: capitalAt(snapIso(sn)) })) : []   // 當時的投入，加減倉後歷史週不會被改寫（Codex review）
+    // D69：相鄰快照的新賺手續費用代幣數量增量估值（feeDelta），舊快照沒有數量時退回美元差
+    const fsnap = (sn: any) => ({ fees_cum_usd: sn.fees_cum_usd, fees_stock: sn.fees_stock ?? null, fees_usdg: sn.fees_usdg ?? null, price_usd: sn.price_usd ?? null, collected: collectedBy(sn) })
+    const dailyFees = notes?.source === 'onchain' ? snaps.map((sn, k) => ({ date: sn.date, usd: feeDelta(k ? fsnap(snaps[k - 1]) : null, fsnap(sn)), capitalUsd: capitalAt(snapIso(sn)),
+      hours: Math.max(0, (Date.parse(snapIso(sn)) - Date.parse(k ? snapIso(snaps[k - 1]) : r.opened_at)) / 3600000),
+      capHours: capitalHours(k ? snapIso(snaps[k - 1]) : r.opened_at, snapIso(sn)) })) : []   // 當時的投入，加減倉後歷史週不會被改寫（Codex review）
     // D66：昨日手續費 = 最近兩筆快照之間「已賺總額」的差（未領 + 領過的）；只有一筆快照 → 從開倉起算
-    let feesLastDay: { usd: number; hours: number; from: string; to: string } | null = null
+    let feesLastDay: { usd: number; hours: number; from: string; to: string; capitalUsd: number; capHours: number } | null = null
     if (latest && !r.closed_at && notes?.source === 'onchain') {
       const prev = snaps.length >= 2 ? snaps[snaps.length - 2] : null
-      const earnedAt = (sn: any) => sn.fees_cum_usd + collectedBy(sn)
-      const toIso = snapIso(latest); const fromIso = prev ? snapIso(prev) : r.opened_at
-      feesLastDay = { usd: earnedAt(latest) - (prev ? earnedAt(prev) : 0), hours: Math.max(0, (Date.parse(toIso) - Date.parse(fromIso)) / 3600000), from: fromIso, to: toIso }
+      const toIso = snapIso(latest); const fromIso = prev ? snapIso(prev) : r.opened_at; const last = dailyFees[dailyFees.length - 1]
+      feesLastDay = { usd: last.usd, hours: last.hours, from: fromIso, to: toIso, capitalUsd: last.capitalUsd, capHours: last.capHours }
     }
     // D65：換池提示。只對持有中的頭寸；費速用保本線的 7 天 pace（沒有就 null，不判冷）
     // D67：用這個頭寸的區間與目前投入，在自己的池和同股票各池的逐小時資料上重放，只比美股交易日、兩邊資料都完整的同一批日子
@@ -226,17 +236,19 @@ export function listPositions(db: Database.Database) {
       if (hs) {
         const cap = actual?.capital_usd ?? r.deposit_usd
         const validUtc = (ps: PoolSeries) => new Set(ps.days.filter(d => d.ok).map(d => snapshotToUtcDay(d.date)))
-        const replay = (ps: PoolSeries) => replayDaily(loadHourly(db, ps.poolId, 24 * 9), cap, r.range_lower, r.range_upper, validUtc(ps))
+        // 共同起點：所有池只取視窗起點之後的小時，並用自己池在起點的價格建倉（D69）
+        const heldH = loadHourly(db, hs.poolId, 24 * 9); const t0 = heldH.length ? heldH[0].ts : 0; const P0 = heldH.length ? heldH[0].priceUsd : undefined
+        const replay = (ps: PoolSeries) => replayDaily((ps.poolId === hs.poolId ? heldH : loadHourly(db, ps.poolId, 24 * 9)).filter(h => h.ts >= t0), cap, r.range_lower, r.range_upper, validUtc(ps), P0)
         const asOf = hs.days.length ? hs.days[hs.days.length - 1].date : null
         const altPools: AltPool[] = alts.filter(a => a.hookKind !== 'liquidity').map(a => { const tv = a.days.map(d => d.tvlUsd).filter((x): x is number => x !== null)
           return { poolId: a.poolId, label: a.hookKind === 'fee_only' ? a.label.replace(/~[\d.]+%|動態/, '動態') : a.label, hookKind: a.hookKind as 'none' | 'fee_only',
             ageDays: a.createdAt && asOf ? (Date.parse(asOf) - Date.parse(a.createdAt.slice(0, 10))) / 86400000 : null,
             tvlNow: tv.length ? tv[tv.length - 1] : null, tvlMin7: tv.length ? Math.min(...tv) : null, tvlMax7: tv.length ? Math.max(...tv) : null, daily: replay(a) } })
-        const wp = weekdayPace(snaps.map(sn => ({ date: sn.date, earned: sn.fees_cum_usd + collectedBy(sn) })))
+        let acc = 0; const wp = weekdayPace(dailyFees.map(d => ({ date: d.date, earned: (acc += d.usd) })))   // D69：與每日手續費同口徑
         switchHintOut = switchHint({ held: replay(hs), alts: altPools, depositUsd: cap, weekdayPace: wp.pace, tradingDaysHeld: wp.days, inRange: actual ? actual.in_range : true, cfg: cfgAll.switch_hint })
       } }
     return { ...r, notes_json: notes, journal, breakeven, switchHint: switchHintOut, feesLastDay, dailyFees, est: simCap.length ? (() => { const e = simCap[simCap.length - 1]; const P = hours[hours.length - 1].priceUsd; return { value_usd: e.valueH, fees_cum_usd: e.grossFees, fees_reinvested_usd: e.reinvested, capital_usd: e.capital, in_range: P >= r.range_lower && P <= r.range_upper, net_usd: e.net, price: P, hours: simCap.length } })() : null,
-      actual, history, capitalMarks, feesWithdrawnUsd: withdrawnBy(latest ? snapIso(latest) : new Date().toISOString()), feesReinvestedUsd: reinvested, curve: simCap.map(e => ({ ts: e.ts, net: e.net })), final: finalSnap ? { value_usd: finalSnap.value_usd, fees_cum_usd: finalSnap.fees_cum_usd } : null }
+      actual, liveBasis: { capital_usd: capitalAt(new Date().toISOString()), withdrawn_usd: withdrawnBy(new Date().toISOString()) }, history, capitalMarks, feesWithdrawnUsd: withdrawnBy(latest ? snapIso(latest) : new Date().toISOString()), feesReinvestedUsd: reinvested, curve: simCap.map(e => ({ ts: e.ts, net: e.net })), final: finalSnap ? { value_usd: finalSnap.value_usd, fees_cum_usd: finalSnap.fees_cum_usd } : null }
   })
 }
 

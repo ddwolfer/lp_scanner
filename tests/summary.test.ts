@@ -55,3 +55,20 @@ it('formatPositions 一行一個頭寸：標籤、天數、昨日費、換池結
   const text = formatDailySummary({ date: 'd', weekdayZh: '一', poolsScanned: 1, candidates: 0, sortKey: 'd1000.r25', top: [], changes: [], positions: [...formatPositions(rows), formatFeesTotal(rows)!, formatApr(rows)!] })
   expect(text).toContain('⚖️ 待累積\n\nΣ 昨日費'); expect(text).not.toContain('- Σ'); expect(text).toContain('\n年化 手續費'); expect(text).not.toContain('- 年化')
 })
+
+it('Σ 昨日費的 %/日 以「本金 × 時數」加權；年化用當時投入的本金天數（Codex review D69）', () => {
+  const mk = (dep: number, usd: number, hours: number, days: any[]) => ({ symbol: 'X', label: 'X', closed_at: null, deposit_usd: dep, est: null, switchHint: null,
+    actual: { fees_cum_usd: usd, value_usd: dep, net_usd: usd, days: 1, in_range: true, fees_withdrawn_usd: 0, fees_reinvested_usd: 0 }, feesLastDay: { usd, hours, from: 'a', to: 'b', capitalUsd: dep }, dailyFees: days }) as any
+  const rows = [mk(9000, 90, 24, [{ date: 'd', usd: 90, capitalUsd: 9000, hours: 24 }]), mk(1000, 5, 12, [{ date: 'd', usd: 5, capitalUsd: 1000, hours: 12 }])]
+  expect(formatFeesTotal(rows)).toContain('（1.00%/日')   // 95 / (9000×24 + 1000×12) × 24 = 1.00%
+  // 先 1,000 持有 10 天、加倉到 3,000 再 10 天：本金天數 = 10,000 + 30,000
+  const grown = mk(3000, 40, 24, [{ date: 'a', usd: 10, capitalUsd: 1000, hours: 240 }, { date: 'b', usd: 30, capitalUsd: 3000, hours: 240 }])
+  expect(formatApr([grown])).toContain('手續費 37%')   // 40 / 40,000 × 365
+})
+
+it('區間內加倉：%/日 用切段後的本金小時（capHours）', () => {
+  const row = { symbol: 'X', label: 'X', closed_at: null, deposit_usd: 10000, est: null, switchHint: null,
+    actual: { fees_cum_usd: 3.3, value_usd: 10000, net_usd: 0, days: 1, in_range: true, fees_withdrawn_usd: 0, fees_reinvested_usd: 0 },
+    feesLastDay: { usd: 3.3, hours: 24, from: 'a', to: 'b', capitalUsd: 10000, capHours: 1000 * 23 + 10000 * 1 }, dailyFees: [{ date: 'd', usd: 3.3, capitalUsd: 10000, hours: 24, capHours: 33000 }] } as any
+  expect(formatFeesTotal([row])).toContain('（0.24%/日')   // 3.3 / 33,000 × 24
+})

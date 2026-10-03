@@ -34,7 +34,7 @@ export async function runPositionsStage(db: Database.Database, usage: ApiUsage, 
         log(`position ${v.label}: opened ${new Date(mint.ts * 1000).toISOString().slice(0, 16)} deposit $${deposit.toFixed(2)} @ ${price.toFixed(2)}`)
       }
     }
-    if ((!v.closed || v.isNew) && shouldWriteSnapshot(db, v.positionId, date, v.isNew, mode)) writePositionSnapshot(db, v.positionId, date, v)
+    if ((!v.closed || v.isNew) && shouldWriteSnapshot(db, v.positionId, date, v.isNew, mode)) writePositionSnapshot(db, v.positionId, date, { ...v, priceUsd: v.priceUsd })
   }
   exportPositions(db, 'data/positions')
   log(`positions: ${onchain.length} onchain, ${vals.length} tracked (${vals.filter(v => v.isNew).length} new, ${vals.filter(v => v.closed).length} closed)`)

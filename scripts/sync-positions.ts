@@ -8,6 +8,8 @@ import { taipeiDate } from '../scanner/time.js'
 import { listPositions } from '../server/queries.js'
 const addr = process.env.TRACK_ADDRESS; if (!addr) { console.log('TRACK_ADDRESS 未設定'); process.exit(1) }
 const db = openDb('db/lp.sqlite'); const now = new Date(); const usage = new ApiUsage()
-await runPositionsStage(db, usage, addr, taipeiDate(now), now, m => console.log(m), process.argv.includes('--snapshot') ? 'force' : 'if_missing')
-for (const p of listPositions(db)) if (!p.closed_at) console.log(`${p.label}  區間 ${p.range_lower.toFixed(2)}–${p.range_upper.toFixed(2)}  投入 $${p.deposit_usd.toFixed(2)}  現值 $${p.actual?.value_usd.toFixed(2)}  未領費 $${p.actual?.fees_cum_usd.toFixed(2)}  淨 ${p.actual ? (p.actual.net_usd >= 0 ? '+' : '') + p.actual.net_usd.toFixed(2) : '—'}  ${p.actual?.in_range ? '在區間' : '出區間'}`)
+const vals = await runPositionsStage(db, usage, addr, taipeiDate(now), now, m => console.log(m), process.argv.includes('--snapshot') ? 'force' : 'if_missing')
+const live = new Map(vals.map(v => [v.positionId, v]))   // D69：印這次同步讀到的即時值，不是當天 06:00 的快照（Codex review）
+// 淨損益用「現在」的投入與已領費，快照後的加倉、領費也算進去（Codex review）
+for (const p0 of listPositions(db)) if (!p0.closed_at) { const v = live.get(p0.id); const p = v && p0.actual ? { ...p0, actual: { ...p0.actual, value_usd: v.valueUsd, fees_cum_usd: v.feesUsd, in_range: v.inRange, net_usd: v.valueUsd + v.feesUsd + p0.liveBasis.withdrawn_usd - p0.liveBasis.capital_usd } } : p0; console.log(`${p.label}  區間 ${p.range_lower.toFixed(2)}–${p.range_upper.toFixed(2)}  投入 $${p.deposit_usd.toFixed(2)}  現值 $${p.actual?.value_usd.toFixed(2)}  未領費 $${p.actual?.fees_cum_usd.toFixed(2)}  淨 ${p.actual ? (p.actual.net_usd >= 0 ? '+' : '') + p.actual.net_usd.toFixed(2) : '—'}  ${p.actual?.in_range ? '在區間' : '出區間'}`) }
 console.log('api_calls', usage.toJSON()); db.close()

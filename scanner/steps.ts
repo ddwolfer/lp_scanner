@@ -88,7 +88,7 @@ export function updateWash(db: Database.Database, poolId: string, date: string, 
 import type { OnchainPosition } from './sources/positions.js'
 import { stockPriceUsd } from './metrics/price.js'
 import { STOCK_DECIMALS } from '../config/chain.js'
-export interface PositionValuation { positionId: number; tokenId: string; poolId: string; label: string; valueUsd: number; feesUsd: number; inRange: boolean; priceUsd: number; rangeLower: number; rangeUpper: number; isNew: boolean; closed: boolean }
+export interface PositionValuation { positionId: number; tokenId: string; poolId: string; label: string; valueUsd: number; feesUsd: number; feesStock: number; feesUsdg: number; inRange: boolean; priceUsd: number; rangeLower: number; rangeUpper: number; isNew: boolean; closed: boolean }
 /** 鏈上頭寸同步進 positions 表（notes JSON 記 tokenId），並回傳估值供寫快照與摘要 */
 export function syncPositions(db: Database.Database, list: OnchainPosition[], stockByAddr: Map<string, { tokenSymbol: string }>, nowIso: string): PositionValuation[] {
   const out: PositionValuation[] = []
@@ -122,12 +122,13 @@ export function syncPositions(db: Database.Database, list: OnchainPosition[], st
     const closed = p.liquidity === 0n
     if (closed && !row.closed_at) db.prepare('UPDATE positions SET closed_at=? WHERE id=?').run(nowIso, row.id)
     if (!closed && row.closed_at) db.prepare('UPDATE positions SET closed_at=NULL WHERE id=?').run(row.id)
-    out.push({ positionId: row.id, tokenId: p.tokenId, poolId: p.poolId, label: row.label, valueUsd, feesUsd, inRange, priceUsd: price, rangeLower: row.range_lower, rangeUpper: row.range_upper, isNew, closed })
+    out.push({ positionId: row.id, tokenId: p.tokenId, poolId: p.poolId, label: row.label, valueUsd, feesUsd, feesStock: stockFee, feesUsdg: usdgFee, inRange, priceUsd: price, rangeLower: row.range_lower, rangeUpper: row.range_upper, isNew, closed })
   }
   return out
 }
-export function writePositionSnapshot(db: Database.Database, positionId: number, date: string, v: { valueUsd: number; feesUsd: number; inRange: boolean }) {
-  db.prepare(`INSERT OR REPLACE INTO position_snapshots(position_id,date,value_usd,fees_cum_usd,in_range,gas_cum_usd,taken_at) VALUES (?,?,?,?,?,NULL,?)`).run(positionId, date, v.valueUsd, v.feesUsd, v.inRange ? 1 : 0, new Date().toISOString())
+export function writePositionSnapshot(db: Database.Database, positionId: number, date: string, v: { valueUsd: number; feesUsd: number; inRange: boolean; feesStock?: number; feesUsdg?: number; priceUsd?: number }) {
+  db.prepare(`INSERT OR REPLACE INTO position_snapshots(position_id,date,value_usd,fees_cum_usd,in_range,gas_cum_usd,taken_at,fees_stock,fees_usdg,price_usd) VALUES (?,?,?,?,?,NULL,?,?,?,?)`)
+    .run(positionId, date, v.valueUsd, v.feesUsd, v.inRange ? 1 : 0, new Date().toISOString(), v.feesStock ?? null, v.feesUsdg ?? null, v.priceUsd ?? null)
 }
 
 export function setPositionOrigin(db: Database.Database, id: number, openedAtIso: string, depositUsd: number, extraNotes: Record<string, unknown>) {

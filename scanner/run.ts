@@ -266,7 +266,8 @@ export function formatPositions(list: ReturnType<typeof listPositions>): string[
 /** D66：年化 = 累積金額 ÷ Σ(投入 × 持有天數) × 365，投入用目前 deposit_usd（加倉後含加倉），天數用鏈上快照的持有天數。手續費與含價差各一個 */
 export function formatApr(list: ReturnType<typeof listPositions>): string | null {
   const open = list.filter(p => !p.closed_at && p.actual)
-  const capDays = open.reduce((a, p) => a + p.deposit_usd * Math.max(1, p.actual!.days), 0)
+  // 本金天數按當時投入累計（每筆快照區間的投入 × 時數），加減倉不會追溯改寫（Codex review D69）
+  const capDays = open.reduce((a, p) => a + ((p as any).dailyFees?.length ? (p as any).dailyFees.reduce((x: number, d: any) => x + (d.capHours ?? (d.capitalUsd ?? p.deposit_usd) * d.hours) / 24, 0) : p.deposit_usd * Math.max(1, p.actual!.days)), 0)
   if (capDays <= 0) return null
   const feesCum = open.reduce((a, p) => a + p.actual!.fees_cum_usd + p.actual!.fees_withdrawn_usd + p.actual!.fees_reinvested_usd, 0)
   const netCum = open.reduce((a, p) => a + p.actual!.net_usd, 0)
@@ -280,9 +281,11 @@ export function formatFeesTotal(list: ReturnType<typeof listPositions>): string 
   const open = list.filter(p => !p.closed_at && p.actual)
   if (!open.length) return null
   const withDay = open.filter(p => p.feesLastDay)
-  const usd = withDay.reduce((a, p) => a + p.feesLastDay!.usd, 0), dep = withDay.reduce((a, p) => a + p.deposit_usd, 0)
+  const usd = withDay.reduce((a, p) => a + p.feesLastDay!.usd, 0)
+  // 分母是「本金 × 時數」的暴露量，不同本金、不同觀察長度才不會被平均時數扭曲（Codex review D69）
+  const capHours = withDay.reduce((a, p) => a + ((p.feesLastDay as any).capHours ?? (p.feesLastDay!.capitalUsd ?? p.deposit_usd) * p.feesLastDay!.hours), 0)
   const hours = withDay.length ? withDay.reduce((a, p) => a + p.feesLastDay!.hours, 0) / withDay.length : 0
-  const perDay = dep > 0 && hours > 0 ? usd / dep * (24 / hours) : null
+  const perDay = capHours > 0 ? usd / capHours * 24 : null
   const feesCum = open.reduce((a, p) => a + p.actual!.fees_cum_usd + p.actual!.fees_withdrawn_usd + p.actual!.fees_reinvested_usd, 0)   // 未領 + 領出 + 再投入（與卡片「手續費合計」同口徑）
   const netCum = open.reduce((a, p) => a + p.actual!.net_usd, 0)
   const day = withDay.length ? `Σ 昨日費 ${money(usd)}${perDay !== null ? `（${(perDay * 100).toFixed(2)}%/日${Math.abs(hours - 24) > 3 ? `，${Math.round(hours)}h` : ''}）` : ''} · ` : ''

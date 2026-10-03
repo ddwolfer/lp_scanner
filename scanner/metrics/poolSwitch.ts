@@ -22,7 +22,7 @@ export interface SwitchHint { verdict: SwitchVerdict; heldDays: number; best: Al
 
 const mean = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / xs.length
 /** 裝得下：最新 TVL ≥ 投入 × tvl_multiple。裝不下的池不列入比較（D67 修正：小池重放會讓你拿走整池大半的費，數字誤導，10/2 MSTR 3% 池 TVL $1.1 萬卻顯示多 $8/日） */
-export const fitsPool = (a: AltPool, depositUsd: number, cfg: SwitchCfg) => a.tvlNow !== null && a.tvlNow >= depositUsd * cfg.tvl_multiple
+export const fitsPool = (a: AltPool, depositUsd: number, cfg: SwitchCfg) => a.tvlMin7 !== null && a.tvlMin7 >= depositUsd * cfg.tvl_multiple   // 看 7 天內最低 TVL：當天剛有人加資金不能讓小池擠過門檻（10/3 SPCX v4 0.30% 池 $3.7 萬→$5.4 萬）
 /** 替代池不夠穩的原因；空陣列 = 穩，可以說「考慮換」 */
 export function stabilityReasons(a: AltPool, depositUsd: number, cfg: SwitchCfg): string[] {
   const r: string[] = []
@@ -74,8 +74,8 @@ const utcDay = (ts: number) => new Date(ts * 1000).toISOString().slice(0, 10)
 /** 快照日 S（台北）大致涵蓋 UTC 的 S−1 那一天（07:30 台北 = 前一天 23:30 UTC） */
 export const snapshotToUtcDay = (snapDate: string) => new Date(Date.parse(snapDate + 'T00:00:00Z') - 86400000).toISOString().slice(0, 10)
 /** 用頭寸的區間與金額在一個池的逐小時資料上重放，回傳「交易日 → 當天模擬手續費」。只保留 validUtcDays 裡的日子 */
-export function replayDaily(hours: SimHour[], capital: number, Pl: number, Pu: number, validUtcDays: Set<string>): DailyReplay {
-  const rows = simulateWithCapital(hours, capital, Pl, Pu, [])
+export function replayDaily(hours: SimHour[], capital: number, Pl: number, Pu: number, validUtcDays: Set<string>, P0?: number): DailyReplay {
+  const rows = simulateWithCapital(hours, capital, Pl, Pu, [], P0)   // P0：所有池用同一個建倉價，部位大小一致（Codex review D69）
   const out: DailyReplay = new Map(); let prev = 0
   rows.forEach(r => { const d = utcDay(r.ts); const fee = r.cumFees - prev; prev = r.cumFees
     if (validUtcDays.has(d) && isUsTradingUtcDay(d)) out.set(d, (out.get(d) ?? 0) + fee) })
