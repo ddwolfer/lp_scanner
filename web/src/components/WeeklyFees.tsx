@@ -27,7 +27,7 @@ export default function WeeklyFees({ reloadToken }: { reloadToken?: unknown }) {
           <CartesianGrid stroke="#262b34" vertical={false} />
           <XAxis dataKey="label" tickFormatter={v => v + ' 週'} />
           <YAxis width={48} tickFormatter={v => '$' + v} />
-          <Tooltip formatter={(v: any) => [fmtUsd(Number(v), 2), '合計']} labelFormatter={l => l + ' 那週'} cursor={{ fill: 'rgba(242,177,53,.08)' }} />
+          <Tooltip formatter={(v: any) => [fmtUsd(Number(v), 2), '合計']} labelFormatter={l => l + ' 那週'} cursor={{ fill: 'rgba(242,177,53,.08)' }} contentStyle={{ background: '#1b1f26', border: '1px solid #333a46', borderRadius: 6 }} labelStyle={{ color: '#d9dde3' }} itemStyle={{ color: '#f2b135' }} />   {/* 固定淺色字：預設會跟著長條顏色，灰色那幾週在深色底上看不見 */}
           <Bar dataKey="total" radius={[3, 3, 0, 0]} onClick={(d: any) => setSel(d.i)} style={{ cursor: 'pointer' }} label={{ position: 'top', fill: '#9aa3b2', fontSize: 12, formatter: (v: any) => '$' + Number(v).toFixed(0) }}>
             {chart.map(c => <Cell key={c.i} fill={c.i === sel ? '#f2b135' : '#4a5263'} />)}
           </Bar>
