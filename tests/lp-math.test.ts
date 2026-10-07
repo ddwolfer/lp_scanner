@@ -16,3 +16,12 @@ it('市值低於持有對照（IL ≥ 0）', () => {
   const { x: x0, y: y0 } = positionAmounts(L, P0, Pl, Pu)
   for (const P of [60, 80, 100, 120, 140]) expect(positionValue(L, P, Pl, Pu)).toBeLessThanOrEqual(x0 * P + y0 + 1e-9)
 })
+
+it('liquidityForDeposit：開倉價在區間外時，部位價值仍等於投入（D71）', () => {
+  for (const [P0, lo, hi] of [[167.6, 148, 158], [200, 100, 150], [80, 100, 150]]) {
+    const L = liquidityForDeposit(2000, P0, lo, hi)
+    expect(positionValue(L, P0, lo, hi)).toBeCloseTo(2000, 6)
+  }
+  const L = liquidityForDeposit(2000, 167.6, 148, 158)
+  expect(2000 / positionAmounts(L, 148, 148, 158).x).toBeCloseTo(Math.sqrt(148 * 158), 6)   // 單邊全部接完的均價 = √(Pl·Pu)
+})
