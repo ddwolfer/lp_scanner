@@ -26,3 +26,13 @@ it('sqrtPriceAtMint 與 amountsForLiquidity 互為反函式', () => {
   const { amount0, amount1 } = amountsForLiquidity(L, sqrtP, tl, tu)
   expect(sqrtPriceAtMint(L, amount0, amount1, tl, tu)).toBeCloseTo(Number(sqrtP) / 2 ** 96, 8)
 })
+
+import { valueOnchainPosition } from '../scanner/steps.js'
+it('valueOnchainPosition：股票 × USDG 才估值（含已撤流動性的可領餘額），其他回 null', () => {
+  const usdg = '0x5fc5360d0400a0fd4f2af552add042d716f1d168', stock = '0xaaa', m = new Map([[stock, { tokenSymbol: 'AAA' }]])
+  const sqrt = BigInt(Math.round(Math.sqrt(10 * 1e6 / 1e18) * 2 ** 96))   // 1 股 = 10 USDG（股票 18 位、USDG 6 位）
+  const base = { protocol: 'v3' as const, tokenId: '1', poolId: 'p', feePpm: 3000, hooks: '0x0', tickLower: 0, tickUpper: 1, liquidity: 0n, tick: 0, sqrtPriceX96: sqrt }
+  const v = valueOnchainPosition({ ...base, currency0: stock, currency1: usdg, amount0: 0, amount1: 0, fee0: 2e18, fee1: 3e6 }, m)!
+  expect(v.valueUsd).toBe(0); expect(v.feesUsd).toBeCloseTo(23, 3)
+  expect(valueOnchainPosition({ ...base, currency0: '0xweth', currency1: usdg, amount0: 1, amount1: 1, fee0: 0, fee1: 0 }, m)).toBeNull()
+})

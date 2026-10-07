@@ -57,3 +57,9 @@ CREATE TABLE IF NOT EXISTS position_journal (
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);  -- [P1] last_discovery_block 等
 CREATE INDEX IF NOT EXISTS idx_snap_date ON pool_snapshots(date);
 CREATE INDEX IF NOT EXISTS idx_hourly_pool_ts ON pool_hourly(pool_id, ts);
+
+-- D70：錢包總值對淨入金（每天一筆，06:00 force、其他 if_missing）
+CREATE TABLE IF NOT EXISTS wallet_snapshots (
+  date TEXT PRIMARY KEY, taken_at TEXT, block INTEGER, status TEXT,   -- status: ok / incomplete / error
+  wallet_usd REAL, lp_usd REAL, lp_fees_usd REAL, net_deposit_usd REAL, adjust_usd REAL, detail TEXT
+);

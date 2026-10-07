@@ -17,7 +17,7 @@ export function formatDailySummary(i: SummaryInput): string {
   i.top.slice(0, 5).forEach((t, n) => lines.push(`${n + 1}. ${t.label} ${t.feePct}  net APR ${pct(t.netApr)}  在區間 ${pct(t.inRangePct)}  交易者 ${t.traderCount ?? '—'}`))
   if (!i.top.length) lines.push('（今日無候選）')
   // 異動段不再列出（dashboard 的昨→今箭頭有），只留 Top 5 + 頭寸 + 連結
-  if (i.positions.length) lines.push('', '💼 我的頭寸', ...i.positions.flatMap(p => p.startsWith('Σ') ? ['', p] : p.startsWith('  ') || p.startsWith('年化') ? [p] : [`- ${p}`]))   // 合計行（D66）前空一行；合計、年化與縮排提示行（D65）不加 bullet
+  if (i.positions.length) lines.push('', '💼 我的頭寸', ...i.positions.flatMap(p => p.startsWith('Σ') ? ['', p] : p.startsWith('  ') || p.startsWith('年化') || p.startsWith('錢包') || p.startsWith('⚠️ 錢包') ? [p] : [`- ${p}`]))   // 合計行（D66）前空一行；合計、年化與縮排提示行（D65）不加 bullet
   if (i.dashboardUrl) lines.push('', `📈 ${i.dashboardUrl}`)
   return lines.join('\n')
 }

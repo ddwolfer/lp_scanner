@@ -27,6 +27,8 @@ import { lastKnownTvl, backfillHookInfo } from './steps.js'
 import { median } from './metrics/hooks.js'
 import { runPositionsStage } from './positionsStage.js'
 import { formatSwitchHint } from './metrics/poolSwitch.js'
+import { formatWalletLine } from './metrics/capital.js'
+import type Database from 'better-sqlite3'
 
 const WEEKDAY_ZH = ['日', '一', '二', '三', '四', '五', '六']
 const STOCKISH = /^[A-Z]{1,5}$/
@@ -220,7 +222,7 @@ export async function runDaily(opts: { dbPath?: string; now?: Date; simOnly?: bo
                      ...cands.filter(r => !prev.has(r.pool_id) && prev.size > 0).map(r => ({ label: label(r), kind: 'added' as const }))]
     const text = formatDailySummary({ date, weekdayZh: WEEKDAY_ZH[new Date(date + 'T00:00:00+08:00').getDay()], poolsScanned, candidates: cands.length, sortKey: scoring.sort_key,
       top: cands.slice(0, 5).map(r => { const sim = r.sim ? JSON.parse(r.sim) as SimJson : null
-        return { label: label(r), feePct: r.fee_ppm !== null ? (r.fee_ppm / 1e4).toFixed(2) + '%' : r.fee_ppm_observed !== null ? '~' + (r.fee_ppm_observed / 1e4).toFixed(2) + '%' : '動態', netApr: getSimField(sim, scoring.sort_key, scoring.rank_field ?? 'net_apr_trimmed'), inRangePct: getSimField(sim, scoring.sort_key, 'in_range_pct'), traderCount: r.trader_count } }), changes, positions: (() => { const l = listPositions(db); const t = formatFeesTotal(l); const a = formatApr(l); return [...formatPositions(l), ...(t ? [t] : []), ...(a ? [a] : [])] })(), dashboardUrl: process.env.DASHBOARD_URL })
+        return { label: label(r), feePct: r.fee_ppm !== null ? (r.fee_ppm / 1e4).toFixed(2) + '%' : r.fee_ppm_observed !== null ? '~' + (r.fee_ppm_observed / 1e4).toFixed(2) + '%' : '動態', netApr: getSimField(sim, scoring.sort_key, scoring.rank_field ?? 'net_apr_trimmed'), inRangePct: getSimField(sim, scoring.sort_key, 'in_range_pct'), traderCount: r.trader_count } }), changes, positions: (() => { const l = listPositions(db); const t = formatFeesTotal(l); const a = formatApr(l); const wl = walletLine(db, date); return [...formatPositions(l), ...(t ? [t] : []), ...(a ? [a] : []), ...(wl ? [wl] : [])] })(), dashboardUrl: process.env.DASHBOARD_URL })
     // D58：資料完整性。swap 抓取失敗比例 > 20%、一個都沒抓、或發現階段失敗 → 摘要開頭標警告，scan_runs.degraded=1（watchdog 會再確認）
     const failPct = swapPools ? swapFailed / swapPools : 0; const degraded = opts.simOnly ? null : (discoveryFailed || swapPools === 0 || failPct > 0.2 || whitelistStale || caStale)   // 上游快取也算不完整，watchdog 才看得到（Codex review）   // --sim-only 不抓 swap：狀態未知記 NULL，不覆蓋成正常（Codex review）
     const staleNote = [whitelistStale ? '白名單用昨日快取（Robinhood /assets 抓不到，新上市股票可能漏掉）' : '', caStale ? '公司行動用昨日快取（新公告不會被排除）' : ''].filter(Boolean).map(x => '⚠️ ' + x).join('\n')
@@ -275,19 +277,32 @@ export function formatApr(list: ReturnType<typeof listPositions>): string | null
   const pct = (v: number) => `${v >= 0 ? '' : '−'}${Math.abs(v * 365 / capDays * 100).toFixed(0)}%`
   return `年化 手續費 ${pct(feesCum)} · 含價差 ${pct(netCum)}（投入 $${dep.toFixed(0)}，加權 ${(capDays / dep).toFixed(1)} 天）`
 }
+/** D70：今天的錢包對淨入金行（沒設定對手地址就不顯示） */
+export function walletLine(db: Database.Database, date: string): string | null {
+  const configured = !!(process.env.CAPITAL_COUNTERPARTIES ?? '').trim()
+  const s = db.prepare('SELECT * FROM wallet_snapshots WHERE date=?').get(date) as any
+  return formatWalletLine(s ?? null, configured, date)
+}
 /** D66：日報頭寸段的合計行：昨日費（%/日）· 累積手續費 · 累積淨。沒有鏈上頭寸回 null */
 export function formatFeesTotal(list: ReturnType<typeof listPositions>): string | null {
   const money = (v: number) => `${v >= 0 ? '+' : '−'}$${Math.abs(v).toFixed(2)}`
   const open = list.filter(p => !p.closed_at && p.actual)
-  if (!open.length) return null
   const withDay = open.filter(p => p.feesLastDay)
   const usd = withDay.reduce((a, p) => a + p.feesLastDay!.usd, 0)
   // 分母是「本金 × 時數」的暴露量，不同本金、不同觀察長度才不會被平均時數扭曲（Codex review D69）
   const capHours = withDay.reduce((a, p) => a + ((p.feesLastDay as any).capHours ?? (p.feesLastDay!.capitalUsd ?? p.deposit_usd) * p.feesLastDay!.hours), 0)
   const hours = withDay.length ? withDay.reduce((a, p) => a + p.feesLastDay!.hours, 0) / withDay.length : 0
   const perDay = capHours > 0 ? usd / capHours * 24 : null
-  const feesCum = open.reduce((a, p) => a + p.actual!.fees_cum_usd + p.actual!.fees_withdrawn_usd + p.actual!.fees_reinvested_usd, 0)   // 未領 + 領出 + 再投入（與卡片「手續費合計」同口徑）
-  const netCum = open.reduce((a, p) => a + p.actual!.net_usd, 0)
+  // D70：累積含已關閉頭寸。開著的 = 未實現；關閉的 = 已實現，優先用 close 日誌明寫的 net_usd / fees_lifetime_usd（實際撤出金額），沒有才用最後快照並標「含估計」
+  const feesOf = (p: any) => p.actual!.fees_cum_usd + p.actual!.fees_withdrawn_usd + p.actual!.fees_reinvested_usd   // 未領 + 領出 + 再投入（與卡片「手續費合計」同口徑）
+  // 先看 close 日誌，日誌齊全就不需要快照；只有退回估算時才要求有快照（Codex review）
+  const closed = list.filter(p => p.closed_at).flatMap((p: any) => { const j = [...(p.journal ?? [])].reverse().find((x: any) => x.kind === 'close' && x.data && x.data.net_usd !== undefined)
+    if (j && j.data.fees_lifetime_usd !== undefined) return [{ net: Number(j.data.net_usd), fees: Number(j.data.fees_lifetime_usd), est: false }]
+    if (!p.actual) return []
+    return [{ net: j ? Number(j.data.net_usd) : p.actual.net_usd, fees: feesOf(p), est: true }] })
+  if (!open.length && !closed.length) return null   // 全部關倉時仍顯示累積（Codex review）
+  const feesCum = open.reduce((a, p) => a + feesOf(p), 0) + closed.reduce((a, c) => a + c.fees, 0)
+  const unreal = open.reduce((a, p) => a + p.actual!.net_usd, 0), real = closed.reduce((a, c) => a + c.net, 0)
   const day = withDay.length ? `Σ 昨日費 ${money(usd)}${perDay !== null ? `（${(perDay * 100).toFixed(2)}%/日${Math.abs(hours - 24) > 3 ? `，${Math.round(hours)}h` : ''}）` : ''} · ` : ''
-  return `${day}累積手續費 ${money(feesCum)} · 累積淨 ${money(netCum)}`
+  return `${day}累積手續費 ${money(feesCum)} · 累積淨 ${money(real + unreal)}（已實現 ${money(real)}、未實現 ${money(unreal)}${closed.some(c => c.est) ? '，含估計' : ''}）`
 }

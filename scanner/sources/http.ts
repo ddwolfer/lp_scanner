@@ -3,6 +3,7 @@ import type { ApiUsage } from './usage.js'
 export interface FetchOpts {
   source: string; usage: ApiUsage; timeoutMs?: number; retries?: number; baseDelayMs?: number
   headers?: Record<string, string>; fetchImpl?: typeof fetch
+  method?: 'GET' | 'POST'; body?: string   // D70：JSON-RPC 用 POST
 }
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 export class HttpError extends Error { constructor(public status: number, url: string) { super(`HTTP ${status} ${url}`) } }
@@ -13,7 +14,7 @@ export async function fetchJson<T>(url: string, o: FetchOpts): Promise<T> {
     o.usage.inc(o.source)
     const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), timeoutMs)
     try {
-      const r = await fetchImpl(url, { headers: o.headers, signal: ctl.signal })
+      const r = await fetchImpl(url, { method: o.method ?? 'GET', headers: o.headers, body: o.body, signal: ctl.signal })
       if (r.ok) return (await r.json()) as T
       if (r.status !== 429 && r.status < 500) throw new HttpError(r.status, url)   // 4xx 不重試
       lastErr = new HttpError(r.status, url)

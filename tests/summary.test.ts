@@ -47,7 +47,7 @@ it('formatPositions 一行一個頭寸：標籤、天數、昨日費、換池結
     'TSLA #1233 (16d)  昨日費 +$3.20 (31h)  ⚖️ 留',
     'GOOGL #7005 (3d)  昨日費 +$1.26  ⚖️ 待累積',
   ])
-  expect(formatFeesTotal(rows)).toBe('Σ 昨日費 +$7.05（0.17%/日） · 累積手續費 +$29.71 · 累積淨 +$57.25')   // 平均 26.3h，偏離 < 3h 不印時數
+  expect(formatFeesTotal(rows)).toBe('Σ 昨日費 +$7.05（0.17%/日） · 累積手續費 +$29.71 · 累積淨 +$57.25（已實現 +$0.00、未實現 +$57.25）')   // 平均 26.3h，偏離 < 3h 不印時數
   expect(formatFeesTotal([rows[0], rows[2]])).toBeNull()
   // 年化：Σ投入×天數 = 645.45×1 + 1056.92×16 + 2106.92×3 = 23876.93；手續費 29.71 → 45%，淨 57.25 → 88%；加權天數 23876.93/3809.29 = 6.3
   expect(formatApr(rows)).toBe('年化 手續費 45% · 含價差 88%（投入 $3809，加權 6.3 天）')
@@ -71,4 +71,20 @@ it('區間內加倉：%/日 用切段後的本金小時（capHours）', () => {
     actual: { fees_cum_usd: 3.3, value_usd: 10000, net_usd: 0, days: 1, in_range: true, fees_withdrawn_usd: 0, fees_reinvested_usd: 0 },
     feesLastDay: { usd: 3.3, hours: 24, from: 'a', to: 'b', capitalUsd: 10000, capHours: 1000 * 23 + 10000 * 1 }, dailyFees: [{ date: 'd', usd: 3.3, capitalUsd: 10000, hours: 24, capHours: 33000 }] } as any
   expect(formatFeesTotal([row])).toContain('（0.24%/日')   // 3.3 / 33,000 × 24
+})
+
+it('D70：累積含已關閉頭寸，close 日誌優先、沒有日誌標「含估計」', () => {
+  const act = (fees: number, net: number) => ({ fees_cum_usd: fees, value_usd: 1000, net_usd: net, days: 5, in_range: true, fees_withdrawn_usd: 0, fees_reinvested_usd: 0 })
+  const open = { symbol: 'A', label: 'A', closed_at: null, deposit_usd: 1000, est: null, switchHint: null, actual: act(10, 50), feesLastDay: { usd: 1, hours: 24, from: 'a', to: 'b', capitalUsd: 1000 } }
+  const closedJ = { symbol: 'B', label: 'B', closed_at: '2026-10-06', deposit_usd: 1000, actual: act(16.68, 121.3), journal: [{ kind: 'close', data: { net_usd: 121.75, fees_lifetime_usd: 16.97 } }] }
+  const closedSnap = { symbol: 'C', label: 'C', closed_at: '2026-09-29', deposit_usd: 1000, actual: act(7, -29.61), journal: [] }
+  expect(formatFeesTotal([open, closedJ] as any)).toBe('Σ 昨日費 +$1.00（0.10%/日） · 累積手續費 +$26.97 · 累積淨 +$171.75（已實現 +$121.75、未實現 +$50.00）')
+  expect(formatFeesTotal([open, closedJ, closedSnap] as any)).toContain('含估計')
+})
+
+it('D70：全部關倉仍顯示累積；只有日誌沒快照的關倉也算', () => {
+  const noSnap = { symbol: 'D', label: 'D', closed_at: '2026-09-01', deposit_usd: 500, actual: null, journal: [{ kind: 'close', data: { net_usd: 6.08, fees_lifetime_usd: 6.08 } }] }
+  const closedJ = { symbol: 'B', label: 'B', closed_at: '2026-10-06', deposit_usd: 1000, actual: { fees_cum_usd: 16.68, value_usd: 1000, net_usd: 121.3, days: 5, in_range: true, fees_withdrawn_usd: 0, fees_reinvested_usd: 0 }, journal: [{ kind: 'close', data: { net_usd: 121.75, fees_lifetime_usd: 16.97 } }] }
+  expect(formatFeesTotal([noSnap, closedJ] as any)).toBe('累積手續費 +$23.05 · 累積淨 +$127.83（已實現 +$127.83、未實現 +$0.00）')
+  expect(formatFeesTotal([{ ...noSnap, journal: [] }] as any)).toBeNull()
 })

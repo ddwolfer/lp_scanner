@@ -5,8 +5,9 @@ import { makeRpc } from './sources/rpc.js'
 import type { ApiUsage } from './sources/usage.js'
 import { fetchV4Positions, fetchV3Positions, fetchMintInfo, sqrtPriceAtMint } from './sources/positions.js'
 import { V3_NPM } from './sources/uniswapV3.js'
-import { syncPositions, writePositionSnapshot, setPositionOrigin, type PositionValuation } from './steps.js'
+import { syncPositions, writePositionSnapshot, setPositionOrigin, valueOnchainPosition, type PositionValuation } from './steps.js'
 import { exportPositions } from '../server/queries.js'
+import { alchemyCall, fetchUsdgTransfers, walletValue, netDeposits } from './sources/wallet.js'
 
 export type SnapshotMode = 'force' | 'if_missing'
 /** D66：當天已有快照時要不要覆蓋。06:00 排程用 force（權威切點）；07:30 掃描與手動同步用 if_missing（只補缺的）；新頭寸一律寫 */
@@ -35,6 +36,26 @@ export async function runPositionsStage(db: Database.Database, usage: ApiUsage, 
       }
     }
     if ((!v.closed || v.isNew) && shouldWriteSnapshot(db, v.positionId, date, v.isNew, mode)) writePositionSnapshot(db, v.positionId, date, { ...v, priceUsd: v.priceUsd })
+  }
+  // D70：錢包總值對淨入金（要 ALCHEMY_KEY 與 CAPITAL_COUNTERPARTIES；失敗只記 error，不影響頭寸）。當天快照只有 ok 才不覆蓋，失敗或不完整的之後的同步可以補
+  const cps = (process.env.CAPITAL_COUNTERPARTIES ?? '').split(',').map(x => x.trim()).filter(Boolean)
+  if (cps.length && process.env.ALCHEMY_KEY && (mode === 'force' || !db.prepare('SELECT 1 FROM wallet_snapshots WHERE date=? AND status = ?').get(date, 'ok'))) {
+    // 直接從鏈上所有頭寸估值（含沒被追蹤、已撤流動性但還沒 collect 的），不經過追蹤表（Codex review）
+    let lpUsd = 0, lpFees = 0; const lpMissing: string[] = []
+    for (const o of onchain) { const v = valueOnchainPosition(o, stockMap)
+      if (v) { lpUsd += v.valueUsd; lpFees += v.feesUsd } else if (o.amount0 > 0 || o.amount1 > 0 || o.fee0 > 0 || o.fee1 > 0) lpMissing.push(`${o.protocol}#${o.tokenId}`) }
+    const adjust = Number(process.env.CAPITAL_ADJUST_USD ?? 0) || 0
+    try {
+      const call = alchemyCall(process.env.ALCHEMY_KEY, usage); const block = await rpc.getBlockNumber()   // 用讀餘額那個節點的區塊，轉帳查詢截止在同一個區塊
+      const dep = netDeposits(await fetchUsdgTransfers(call, trackAddr, block), trackAddr, cps, ADDR.usdg)
+      const w = await walletValue(rpc, db, trackAddr as `0x${string}`, block)
+      db.prepare(`INSERT OR REPLACE INTO wallet_snapshots(date,taken_at,block,status,wallet_usd,lp_usd,lp_fees_usd,net_deposit_usd,adjust_usd,detail) VALUES (?,?,?,?,?,?,?,?,?,?)`)
+        .run(date, new Date().toISOString(), Number(block), w.missing.length || lpMissing.length ? 'incomplete' : 'ok', w.usd, lpUsd, lpFees, dep.net, adjust, JSON.stringify({ wallet: w.detail, missing: [...w.missing, ...lpMissing], deposits: dep }))
+      log(`wallet: tokens $${w.usd.toFixed(2)} + LP $${lpUsd.toFixed(2)} + fees $${lpFees.toFixed(2)} vs net deposit $${dep.net.toFixed(2)} (${dep.n} transfers)${w.missing.length ? ' missing price: ' + w.missing.join(',') : ''}`)
+    } catch (e) {
+      db.prepare(`INSERT OR REPLACE INTO wallet_snapshots(date,taken_at,status,detail) VALUES (?,?,?,?)`).run(date, new Date().toISOString(), 'error', String((e as Error).message ?? e).slice(0, 300))
+      log(`wallet: FAILED ${String((e as Error).message ?? e).slice(0, 120)}`)
+    }
   }
   exportPositions(db, 'data/positions')
   log(`positions: ${onchain.length} onchain, ${vals.length} tracked (${vals.filter(v => v.isNew).length} new, ${vals.filter(v => v.closed).length} closed)`)

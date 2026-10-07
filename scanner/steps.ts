@@ -89,6 +89,15 @@ import type { OnchainPosition } from './sources/positions.js'
 import { stockPriceUsd } from './metrics/price.js'
 import { STOCK_DECIMALS } from '../config/chain.js'
 export interface PositionValuation { positionId: number; tokenId: string; poolId: string; label: string; valueUsd: number; feesUsd: number; feesStock: number; feesUsdg: number; inRange: boolean; priceUsd: number; rangeLower: number; rangeUpper: number; isNew: boolean; closed: boolean }
+/** D70：單一鏈上頭寸的美元估值（股票 × USDG 才估得出來，其他回 null）。syncPositions 與錢包對帳共用 */
+export function valueOnchainPosition(p: OnchainPosition, stockByAddr: Map<string, { tokenSymbol: string }>): { valueUsd: number; feesUsd: number } | null {
+  const stockIs0 = p.currency1 === ADDR.usdg && stockByAddr.has(p.currency0), stockIs1 = p.currency0 === ADDR.usdg && stockByAddr.has(p.currency1)
+  if (!stockIs0 && !stockIs1) return null
+  const price = stockPriceUsd(p.sqrtPriceX96, stockIs0)
+  const stockAmt = (stockIs0 ? p.amount0 : p.amount1) / 10 ** STOCK_DECIMALS, usdgAmt = (stockIs0 ? p.amount1 : p.amount0) / 10 ** USDG_DECIMALS
+  const stockFee = (stockIs0 ? p.fee0 : p.fee1) / 10 ** STOCK_DECIMALS, usdgFee = (stockIs0 ? p.fee1 : p.fee0) / 10 ** USDG_DECIMALS
+  return { valueUsd: stockAmt * price + usdgAmt, feesUsd: stockFee * price + usdgFee }
+}
 /** 鏈上頭寸同步進 positions 表（notes JSON 記 tokenId），並回傳估值供寫快照與摘要 */
 export function syncPositions(db: Database.Database, list: OnchainPosition[], stockByAddr: Map<string, { tokenSymbol: string }>, nowIso: string): PositionValuation[] {
   const out: PositionValuation[] = []
