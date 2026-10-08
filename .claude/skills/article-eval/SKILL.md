@@ -6,6 +6,7 @@ description: 使用者貼一篇 X / Twitter / Medium 的 LP、DeFi、meme、空�
 # article-eval：評估 DeFi / LP 相關文章
 
 ## 先查證，再評論
+0. X / Twitter 連結先用 `x-reader` skill（fxtwitter API）抓全文與圖片；Chrome 開 X 常卡在載入畫面。
 1. 文章給了地址、池、hook、網站、API → **一定實際查**：
    - 池 / hook：`pnpm pool <poolId>`；hook 權限位用 `scanner/metrics/hooks.ts` 的 `hookInfo()`；PONS 案例：hook 含 beforeAddLiquidity 就是白名單池。
    - 網站：WebFetch 首頁與 /markets、/docs；API 用 curl 直接打，看回傳欄位（trenches 案例：`/api/traders` 的 win_rate 中位數 33%，自己否定了「聰明錢」）。
