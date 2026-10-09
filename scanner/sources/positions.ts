@@ -47,48 +47,62 @@ export interface OnchainPosition {
   amount0: number; amount1: number; fee0: number; fee1: number   // raw 單位
 }
 /** 列出地址持有的 PositionManager tokenId：優先 Alchemy NFT API（1 次），否則掃 Transfer 事件（從 fromBlock 起） */
-export async function listPositionTokenIds(rpc: Rpc, owner: string, usage: ApiUsage, alchemyKey?: string, fromBlock = 0n): Promise<string[]> {
+export async function listPositionTokenIds(rpc: Rpc, owner: string, usage: ApiUsage, alchemyKey?: string, fromBlock = 0n, at?: bigint): Promise<string[]> {   // at：退路的 getLogs 與 ownerOf 都截止在這個區塊（D74）
   if (alchemyKey) {
     const url = `https://robinhood-mainnet.g.alchemy.com/nft/v3/${alchemyKey}/getNFTsForOwner?owner=${owner}&contractAddresses[]=${POSITION_MANAGER}&withMetadata=false&pageSize=100`
     const r = await fetchJson<{ ownedNfts: { tokenId: string }[] }>(url, { source: 'alchemy', usage })
     return r.ownedNfts.map(n => n.tokenId)
   }
-  const to = await rpc.getBlockNumber()
+  const to = at ?? await rpc.getBlockNumber()
   const logs = await rpc.getLogsChunked({ address: POSITION_MANAGER, event: TRANSFER, args: { to: owner as `0x${string}` } }, fromBlock, to, BigInt(CHAIN.getLogsChunk) * 10n)
   const ids = [...new Set(logs.map((l: any) => String(l.args.tokenId)))]
   const mine: string[] = []
-  for (const id of ids) { const o = await rpc.call(() => rpc.client.readContract({ address: POSITION_MANAGER, abi: PM_ABI, functionName: 'ownerOf', args: [BigInt(id)] })); if (String(o).toLowerCase() === owner.toLowerCase()) mine.push(id) }
+  for (const id of ids) { const o = await rpc.call(() => rpc.client.readContract({ address: POSITION_MANAGER, abi: PM_ABI, functionName: 'ownerOf', args: [BigInt(id)], blockNumber: at })).catch(e => { if (isRevert(e)) return null; throw e }); if (o && String(o).toLowerCase() === owner.toLowerCase()) mine.push(id) }   // 已燒掉或那時還不存在的跳過，連線錯誤往上丟
   return mine
 }
-export async function readV4Position(rpc: Rpc, tokenId: string): Promise<OnchainPosition> {
+export async function readV4Position(rpc: Rpc, tokenId: string, at?: bigint): Promise<OnchainPosition> {   // at：固定讀取區塊（D74）
   const id = BigInt(tokenId)
-  const [pk, info] = await rpc.call(() => rpc.client.readContract({ address: POSITION_MANAGER, abi: PM_ABI, functionName: 'getPoolAndPositionInfo', args: [id] }))
+  const [pk, info] = await rpc.call(() => rpc.client.readContract({ address: POSITION_MANAGER, abi: PM_ABI, functionName: 'getPoolAndPositionInfo', args: [id], blockNumber: at }))
   const { tickLower, tickUpper } = decodePositionInfo(info)
   const poolId = poolIdOf(pk)
   const [liquidity, slot, [in0, in1]] = await Promise.all([
-    rpc.call(() => rpc.client.readContract({ address: POSITION_MANAGER, abi: PM_ABI, functionName: 'getPositionLiquidity', args: [id] })),
-    rpc.call(() => rpc.client.readContract({ address: ADDR.stateView, abi: SV_ABI, functionName: 'getSlot0', args: [poolId as `0x${string}`] })),
-    rpc.call(() => rpc.client.readContract({ address: ADDR.stateView, abi: SV_ABI, functionName: 'getFeeGrowthInside', args: [poolId as `0x${string}`, tickLower, tickUpper] })),
+    rpc.call(() => rpc.client.readContract({ address: POSITION_MANAGER, abi: PM_ABI, functionName: 'getPositionLiquidity', args: [id], blockNumber: at })),
+    rpc.call(() => rpc.client.readContract({ address: ADDR.stateView, abi: SV_ABI, functionName: 'getSlot0', args: [poolId as `0x${string}`], blockNumber: at })),
+    rpc.call(() => rpc.client.readContract({ address: ADDR.stateView, abi: SV_ABI, functionName: 'getFeeGrowthInside', args: [poolId as `0x${string}`, tickLower, tickUpper], blockNumber: at })),
   ])
   const salt = `0x${id.toString(16).padStart(64, '0')}` as `0x${string}`
-  const [pl, last0, last1] = await rpc.call(() => rpc.client.readContract({ address: ADDR.stateView, abi: SV_ABI, functionName: 'getPositionInfo', args: [poolId as `0x${string}`, POSITION_MANAGER, tickLower, tickUpper, salt] }))
+  const [pl, last0, last1] = await rpc.call(() => rpc.client.readContract({ address: ADDR.stateView, abi: SV_ABI, functionName: 'getPositionInfo', args: [poolId as `0x${string}`, POSITION_MANAGER, tickLower, tickUpper, salt], blockNumber: at }))
   const { amount0, amount1 } = amountsForLiquidity(liquidity, slot[0], tickLower, tickUpper)
   return { protocol: 'v4', tokenId, poolId, currency0: pk.currency0.toLowerCase(), currency1: pk.currency1.toLowerCase(), feePpm: (pk.fee & 0x800000) ? null : pk.fee, hooks: pk.hooks.toLowerCase(),
     tickLower, tickUpper, liquidity, tick: slot[1], sqrtPriceX96: slot[0], amount0, amount1, fee0: unclaimedFees(pl, in0, last0), fee1: unclaimedFees(pl, in1, last1) }
 }
-export async function fetchV4Positions(rpc: Rpc, owner: string, usage: ApiUsage, alchemyKey?: string): Promise<OnchainPosition[]> {
-  const ids = await listPositionTokenIds(rpc, owner, usage, alchemyKey)
+/** 合約呼叫被 revert（不是連線或限流問題） */
+export const isRevert = (e: unknown): boolean => { let x: any = e; for (let i = 0; x && i < 8; i++, x = x.cause) { if (x?.name === 'ContractFunctionRevertedError' || /execution reverted|revert/i.test(String(x?.details ?? x?.shortMessage ?? ''))) return true } return false }
+/** D74：rpc 只做 eth_call（可以是 Alchemy）；列 tokenId 若退回 getLogs，一定走 opts.logsRpc（公用 RPC），不送到 Alchemy（免費方案 getLogs 只能 10 個區塊） */
+export async function fetchV4Positions(rpc: Rpc, owner: string, usage: ApiUsage, alchemyKey?: string, opts: { logsRpc?: Rpc; at?: bigint } = {}): Promise<OnchainPosition[]> {
+  const ids = await listPositionTokenIds(opts.logsRpc ?? rpc, owner, usage, alchemyKey, 0n, opts.at)
   const out: OnchainPosition[] = []
-  for (const id of ids) out.push(await readV4Position(rpc, id))
+  for (const id of ids) {
+    // Alchemy NFT 清單是「現在」的持有；固定區塊時先確認那個區塊確實屬於 owner，同步途中新開或轉走的跳過（Codex review）
+    if (opts.at !== undefined) {
+      // 只有「合約 revert」（那個區塊 token 還不存在）才跳過；連線、限流等錯誤往上丟，不能默默少算一個頭寸（Codex review P1）
+      const o = await rpc.call(() => rpc.client.readContract({ address: POSITION_MANAGER, abi: PM_ABI, functionName: 'ownerOf', args: [BigInt(id)], blockNumber: opts.at })).catch(e => { if (isRevert(e)) return null; throw e })
+      if (!o || String(o).toLowerCase() !== owner.toLowerCase()) continue }
+    out.push(await readV4Position(rpc, id, opts.at))
+  }
   return out
 }
 
 const ERC20_TRANSFER_TOPIC = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef'
 export interface MintInfo { txHash: string; block: bigint; ts: number; deposits: Record<string, bigint>; liquidity: bigint | null }  // liquidity = mint 當下加入的流動性（v4 ModifyLiquidity.liquidityDelta / v3 Mint.amount）  // deposits: token address → raw amount（owner 轉進 PoolManager 的）
 /** 從 PositionManager 的 Transfer(0x0 → owner, tokenId) 找 mint 交易，並從 receipt 的 ERC20 Transfer 取投入量。公開 RPC 對 topic 精確過濾允許全鏈範圍（DECISIONS D29） */
-export async function fetchMintInfo(rpc: Rpc, tokenId: string, owner: string, opts: { nft?: `0x${string}`; depositTo?: string } = {}): Promise<MintInfo | null> {
+export async function fetchMintInfo(rpc: Rpc, tokenId: string, owner: string, opts: { nft?: `0x${string}`; depositTo?: string; fromBlock?: bigint; toBlock?: bigint } = {}): Promise<MintInfo | null> {
   const nft = opts.nft ?? POSITION_MANAGER; const depositTo = (opts.depositTo ?? ADDR.poolManager).toLowerCase()
-  const logs = await rpc.call(() => rpc.client.getLogs({ address: nft, event: TRANSFER, args: { from: ADDR.zero as `0x${string}`, tokenId: BigInt(tokenId) }, fromBlock: 0n, toBlock: 'latest' }))
+  // D74：公用 RPC 自 9/29 起拒絕全鏈範圍的 getLogs（Invalid parameters），給範圍時分段查；沒給才用舊的全範圍
+  const filter = { address: nft, event: TRANSFER, args: { from: ADDR.zero as `0x${string}`, tokenId: BigInt(tokenId) } }
+  const logs: any[] = opts.fromBlock !== undefined && opts.toBlock !== undefined
+    ? await rpc.getLogsChunked(filter, opts.fromBlock, opts.toBlock)
+    : await rpc.call(() => rpc.client.getLogs({ ...filter, fromBlock: 0n, toBlock: 'latest' }))
   const mint = logs[0]; if (!mint) return null
   const [receipt, block] = await Promise.all([
     rpc.call(() => rpc.client.getTransactionReceipt({ hash: mint.transactionHash! })),
@@ -123,17 +137,17 @@ const NPM_ABI = parseAbi([
 const V3F_ABI = parseAbi(['function getPool(address, address, uint24) view returns (address)'])
 const MAX128 = 2n ** 128n - 1n
 /** v3 頭寸：未領費用用 collect 的 eth_call 模擬（不送交易）取得 tokensOwed + 未結算 feeGrowth */
-export async function fetchV3Positions(rpc: Rpc, owner: string): Promise<OnchainPosition[]> {
-  const n = await rpc.call(() => rpc.client.readContract({ address: V3_NPM, abi: NPM_ABI, functionName: 'balanceOf', args: [owner as `0x${string}`] }))
+export async function fetchV3Positions(rpc: Rpc, owner: string, at?: bigint): Promise<OnchainPosition[]> {   // at：固定讀取區塊（D74）
+  const n = await rpc.call(() => rpc.client.readContract({ address: V3_NPM, abi: NPM_ABI, functionName: 'balanceOf', args: [owner as `0x${string}`], blockNumber: at }))
   const out: OnchainPosition[] = []
   for (let i = 0n; i < n; i++) {
-    const id = await rpc.call(() => rpc.client.readContract({ address: V3_NPM, abi: NPM_ABI, functionName: 'tokenOfOwnerByIndex', args: [owner as `0x${string}`, i] }))
-    const p = await rpc.call(() => rpc.client.readContract({ address: V3_NPM, abi: NPM_ABI, functionName: 'positions', args: [id] }))
+    const id = await rpc.call(() => rpc.client.readContract({ address: V3_NPM, abi: NPM_ABI, functionName: 'tokenOfOwnerByIndex', args: [owner as `0x${string}`, i], blockNumber: at }))
+    const p = await rpc.call(() => rpc.client.readContract({ address: V3_NPM, abi: NPM_ABI, functionName: 'positions', args: [id], blockNumber: at }))
     const [, , token0, token1, fee, tickLower, tickUpper, liquidity] = p
-    const pool = await rpc.call(() => rpc.client.readContract({ address: V3_FACTORY, abi: V3F_ABI, functionName: 'getPool', args: [token0, token1, fee] }))
-    const slot = await rpc.call(() => rpc.client.readContract({ address: pool, abi: V3_POOL_ABI, functionName: 'slot0' }))
+    const pool = await rpc.call(() => rpc.client.readContract({ address: V3_FACTORY, abi: V3F_ABI, functionName: 'getPool', args: [token0, token1, fee], blockNumber: at }))
+    const slot = await rpc.call(() => rpc.client.readContract({ address: pool, abi: V3_POOL_ABI, functionName: 'slot0', blockNumber: at }))
     let fee0 = 0, fee1 = 0
-    try { const r = await rpc.call(() => rpc.client.simulateContract({ address: V3_NPM, abi: NPM_ABI, functionName: 'collect', args: [{ tokenId: id, recipient: owner as `0x${string}`, amount0Max: MAX128, amount1Max: MAX128 }], account: owner as `0x${string}` })); fee0 = Number(r.result[0]); fee1 = Number(r.result[1]) } catch { /* 沒有可領費用時 collect 可能 revert */ }
+    try { const r = await rpc.call(() => rpc.client.simulateContract({ address: V3_NPM, abi: NPM_ABI, functionName: 'collect', args: [{ tokenId: id, recipient: owner as `0x${string}`, amount0Max: MAX128, amount1Max: MAX128 }], account: owner as `0x${string}`, blockNumber: at })); fee0 = Number(r.result[0]); fee1 = Number(r.result[1]) } catch { /* 沒有可領費用時 collect 可能 revert */ }
     const { amount0, amount1 } = amountsForLiquidity(liquidity, slot[0], tickLower, tickUpper)
     out.push({ protocol: 'v3', tokenId: id.toString(), poolId: String(pool).toLowerCase(), currency0: token0.toLowerCase(), currency1: token1.toLowerCase(), feePpm: fee, hooks: ADDR.zero,
       tickLower, tickUpper, liquidity, tick: slot[1], sqrtPriceX96: slot[0], amount0, amount1, fee0, fee1 })

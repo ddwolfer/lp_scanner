@@ -14,3 +14,4 @@ const live = new Map(vals.map(v => [v.positionId, v]))   // D69：印這次同�
 for (const p0 of listPositions(db)) if (!p0.closed_at) { const v = live.get(p0.id); const p = v && p0.actual ? { ...p0, actual: { ...p0.actual, value_usd: v.valueUsd, fees_cum_usd: v.feesUsd, in_range: v.inRange, net_usd: v.valueUsd + v.feesUsd + p0.liveBasis.withdrawn_usd - p0.liveBasis.capital_usd } } : p0; console.log(`${p.label}  區間 ${p.range_lower.toFixed(2)}–${p.range_upper.toFixed(2)}  投入 $${p.deposit_usd.toFixed(2)}  現值 $${p.actual?.value_usd.toFixed(2)}  未領費 $${p.actual?.fees_cum_usd.toFixed(2)}  淨 ${p.actual ? (p.actual.net_usd >= 0 ? '+' : '') + p.actual.net_usd.toFixed(2) : '—'}  ${p.actual?.in_range ? '在區間' : '出區間'}`) }
 { const { walletLine } = await import('../scanner/run.js'); const wl = walletLine(db, taipeiDate(now)); if (wl) console.log(wl) }
 console.log('api_calls', usage.toJSON()); db.close()
+process.exit(0)   // D74：補查開倉交易逾時後底下的公用 RPC 呼叫可能還在退避，不等它
