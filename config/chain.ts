@@ -39,8 +39,8 @@ const ScoringSchema = z.object({
   wash_analysis_top_n: z.number(),
   scan: z.object({ swap_fetch_min_tvl_usd: z.number(), wash_sample_swaps: z.number(), ref_max_spread_pct: z.number().default(0.02), watch_symbols: z.array(z.string()).default([]) }),
   // D65：頭寸「是否該換池」提示的門檻
-  switch_hint: z.object({ ratio: z.number(), days: z.number(), min_extra_usd: z.number(), min_age_days: z.number(), tvl_multiple: z.number(), tvl_stability: z.number(), cold_usd_per_day: z.number(), cold_min_days: z.number() })
-    .default({ ratio: 1.3, days: 3, min_extra_usd: 0.5, min_age_days: 14, tvl_multiple: 20, tvl_stability: 0.5, cold_usd_per_day: 1, cold_min_days: 5 }),   // D67
+  switch_hint: z.object({ ratio: z.number(), days: z.number(), min_extra_usd: z.number(), min_age_days: z.number(), tvl_multiple: z.number(), tvl_stability: z.number(), cold_usd_per_day: z.number(), cold_min_days: z.number(), max_share: z.number().default(0.25) })
+    .default({ ratio: 1.3, days: 3, min_extra_usd: 0.5, min_age_days: 14, tvl_multiple: 20, tvl_stability: 0.5, cold_usd_per_day: 1, cold_min_days: 5, max_share: 0.25 }),   // D67、D73
   economics: z.object({ gas_usd_per_tx: z.number(), lifecycle_txs: z.number(), capacity_share: z.number() }),
 })
 export type Scoring = z.infer<typeof ScoringSchema>

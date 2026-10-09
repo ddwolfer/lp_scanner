@@ -8,8 +8,9 @@ export interface AltPool {
   poolId: string; label: string; hookKind: 'none' | 'fee_only'
   ageDays: number | null; tvlNow: number | null; tvlMin7: number | null; tvlMax7: number | null
   daily: DailyReplay
+  share?: number | null   // D73：重放時你在活躍流動性中按手續費加權的佔比；太高代表池子現價附近太薄，數字不可信
 }
-export interface SwitchCfg { ratio: number; days: number; min_extra_usd: number; min_age_days: number; tvl_multiple: number; tvl_stability: number; cold_usd_per_day: number; cold_min_days: number }
+export interface SwitchCfg { ratio: number; days: number; min_extra_usd: number; min_age_days: number; tvl_multiple: number; tvl_stability: number; cold_usd_per_day: number; cold_min_days: number; max_share?: number }
 export interface SwitchInput {
   held: DailyReplay; alts: AltPool[]; depositUsd: number
   weekdayPace: number | null      // 實收：最近幾個交易日的平均已賺手續費（週末排除）；null = 資料不足
@@ -22,7 +23,8 @@ export interface SwitchHint { verdict: SwitchVerdict; heldDays: number; best: Al
 
 const mean = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / xs.length
 /** 裝得下：最新 TVL ≥ 投入 × tvl_multiple。裝不下的池不列入比較（D67 修正：小池重放會讓你拿走整池大半的費，數字誤導，10/2 MSTR 3% 池 TVL $1.1 萬卻顯示多 $8/日） */
-export const fitsPool = (a: AltPool, depositUsd: number, cfg: SwitchCfg) => a.tvlMin7 !== null && a.tvlMin7 >= depositUsd * cfg.tvl_multiple   // 看 7 天內最低 TVL：當天剛有人加資金不能讓小池擠過門檻（10/3 SPCX v4 0.30% 池 $3.7 萬→$5.4 萬）
+export const fitsPool = (a: AltPool, depositUsd: number, cfg: SwitchCfg) => a.tvlMin7 !== null && a.tvlMin7 >= depositUsd * cfg.tvl_multiple
+  && (a.share === undefined || a.share === null || a.share <= (cfg.max_share ?? 0.25))   // D73：現價附近太薄（你會佔超過 max_share）也算裝不下，10/9 CRCL v4 0.30% 池重放多 $30/日即此例   // 看 7 天內最低 TVL：當天剛有人加資金不能讓小池擠過門檻（10/3 SPCX v4 0.30% 池 $3.7 萬→$5.4 萬）
 /** 替代池不夠穩的原因；空陣列 = 穩，可以說「考慮換」 */
 export function stabilityReasons(a: AltPool, depositUsd: number, cfg: SwitchCfg): string[] {
   const r: string[] = []
@@ -42,7 +44,8 @@ export function compareAlt(held: DailyReplay, a: AltPool, depositUsd: number, cf
 export function switchHint(i: SwitchInput): SwitchHint {
   const heldDays = i.held.size
   if (heldDays < i.cfg.days) return { verdict: 'no_data', heldDays, best: null, altsPending: 0 }
-  const results = i.alts.filter(a => fitsPool(a, i.depositUsd, i.cfg)).map(a => compareAlt(i.held, a, i.depositUsd, i.cfg))
+  const fitting = i.alts.filter(a => fitsPool(a, i.depositUsd, i.cfg)); const tooSmall = i.alts.length - fitting.length   // 記下被容量排除的數量：不能拿來判「量已冷」（Codex plan review）
+  const results = fitting.map(a => compareAlt(i.held, a, i.depositUsd, i.cfg))
   const altsPending = results.filter(r => r === null).length
   const ok = results.filter((r): r is AltResult => r !== null)
   // 候選：同一批交易日裡至少 cfg.days 天 ≥ ratio 倍，且平均每天多 ≥ min_extra_usd
@@ -52,7 +55,7 @@ export function switchHint(i: SwitchInput): SwitchHint {
   if (cand.length) return { verdict: 'watch', heldDays, best: cand[0], altsPending }
   const best = [...ok].sort((a, b) => b.extraPerDay - a.extraPerDay)[0] ?? null
   const cold = i.inRange && i.weekdayPace !== null && i.tradingDaysHeld >= i.cfg.cold_min_days && i.weekdayPace < i.cfg.cold_usd_per_day
-  if (cold) return { verdict: altsPending ? 'no_data' : 'cold', heldDays, best, altsPending }   // 還有比不了的池時不下「冷」的結論
+  if (cold) return { verdict: altsPending ? 'no_data' : tooSmall ? 'stay' : 'cold', heldDays, best, altsPending }   // 還有比不了的池時不下「冷」的結論；有替代池只是容量不夠時也不判冷
   return { verdict: 'stay', heldDays, best, altsPending }
 }
 /** 日報 / 卡片用的短字 */
@@ -73,15 +76,16 @@ export const isUsTradingUtcDay = (ymd: string) => { const w = new Date(ymd + 'T0
 const utcDay = (ts: number) => new Date(ts * 1000).toISOString().slice(0, 10)
 /** 快照日 S（台北）大致涵蓋 UTC 的 S−1 那一天（07:30 台北 = 前一天 23:30 UTC） */
 export const snapshotToUtcDay = (snapDate: string) => new Date(Date.parse(snapDate + 'T00:00:00Z') - 86400000).toISOString().slice(0, 10)
-/** 用頭寸的區間與金額在一個池的逐小時資料上重放，回傳「交易日 → 當天模擬手續費」。只保留 validUtcDays 裡的日子 */
-export function replayDaily(hours: SimHour[], capital: number, Pl: number, Pu: number, validUtcDays: Set<string>, P0?: number): DailyReplay {
+/** 用頭寸的區間與金額在一個池的逐小時資料上重放，回傳「交易日 → 當天模擬手續費」與「按模擬手續費加權的佔比」。只保留 validUtcDays 裡的交易日（D73：佔比也只算這些日子） */
+export function replayStats(hours: SimHour[], capital: number, Pl: number, Pu: number, validUtcDays: Set<string>, P0?: number): { daily: DailyReplay; feeWeightedShare: number | null } {
   const rows = simulateWithCapital(hours, capital, Pl, Pu, [], P0)   // P0：所有池用同一個建倉價，部位大小一致（Codex review D69）
-  const out: DailyReplay = new Map(); let prev = 0
+  const out: DailyReplay = new Map(); let prev = 0, wsum = 0, fsum = 0
   rows.forEach(r => { const d = utcDay(r.ts); const fee = r.cumFees - prev; prev = r.cumFees
-    if (validUtcDays.has(d) && isUsTradingUtcDay(d)) out.set(d, (out.get(d) ?? 0) + fee) })
+    if (validUtcDays.has(d) && isUsTradingUtcDay(d)) { out.set(d, (out.get(d) ?? 0) + fee); wsum += r.share * fee; fsum += fee } })
   for (const d of validUtcDays) if (isUsTradingUtcDay(d) && !out.has(d)) out.set(d, 0)   // 資料完整但整天沒成交 = 有效的 0
-  return out
+  return { daily: out, feeWeightedShare: fsum > 0 ? wsum / fsum : null }   // 按手續費加權：賺最多的那幾小時權重最大，平均不會掩蓋極端小時（Codex plan review）
 }
+export const replayDaily = (hours: SimHour[], capital: number, Pl: number, Pu: number, validUtcDays: Set<string>, P0?: number): DailyReplay => replayStats(hours, capital, Pl, Pu, validUtcDays, P0).daily
 /** 實收費速（只算交易日）：相鄰兩天快照的已賺差，快照日 S 對應 UTC S−1 是交易日才算；回傳最近 n 個的平均與總交易日數 */
 export function weekdayPace(snaps: { date: string; earned: number }[], n = 5): { pace: number | null; days: number } {
   const diffs: number[] = []

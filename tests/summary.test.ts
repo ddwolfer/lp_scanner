@@ -50,7 +50,7 @@ it('formatPositions 一行一個頭寸：標籤、天數、昨日費、換池結
   expect(formatFeesTotal(rows)).toBe('Σ 昨日費 +$7.05（0.17%/日） · 累積手續費 +$29.71 · 累積淨 +$57.25（已實現 +$0.00、未實現 +$57.25）')   // 平均 26.3h，偏離 < 3h 不印時數
   expect(formatFeesTotal([rows[0], rows[2]])).toBeNull()
   // 年化：Σ投入×天數 = 645.45×1 + 1056.92×16 + 2106.92×3 = 23876.93；手續費 29.71 → 45%，淨 57.25 → 88%；加權天數 23876.93/3809.29 = 6.3
-  expect(formatApr(rows)).toBe('年化 手續費 45% · 含價差 88%（投入 $3809，加權 6.3 天）')
+  expect(formatApr(rows)).toBe('年化 手續費 45% · 含價差 88%（含已關閉；目前投入 $3809，加權 6.3 天）')
   expect(formatApr([rows[0]])).toBeNull()
   const text = formatDailySummary({ date: 'd', weekdayZh: '一', poolsScanned: 1, candidates: 0, sortKey: 'd1000.r25', top: [], changes: [], positions: [...formatPositions(rows), formatFeesTotal(rows)!, formatApr(rows)!] })
   expect(text).toContain('⚖️ 待累積\n\nΣ 昨日費'); expect(text).not.toContain('- Σ'); expect(text).toContain('\n年化 手續費'); expect(text).not.toContain('- 年化')
@@ -87,4 +87,19 @@ it('D70：全部關倉仍顯示累積；只有日誌沒快照的關倉也算', (
   const closedJ = { symbol: 'B', label: 'B', closed_at: '2026-10-06', deposit_usd: 1000, actual: { fees_cum_usd: 16.68, value_usd: 1000, net_usd: 121.3, days: 5, in_range: true, fees_withdrawn_usd: 0, fees_reinvested_usd: 0 }, journal: [{ kind: 'close', data: { net_usd: 121.75, fees_lifetime_usd: 16.97 } }] }
   expect(formatFeesTotal([noSnap, closedJ] as any)).toBe('累積手續費 +$23.05 · 累積淨 +$127.83（已實現 +$127.83、未實現 +$0.00）')
   expect(formatFeesTotal([{ ...noSnap, journal: [] }] as any)).toBeNull()
+})
+
+import { lifetimeTotals } from '../scanner/run.js'
+it('D73：年化含已關閉頭寸；單位：$1,000 放 24 小時賺 $1 → 年化 36.5%；沒有本金時數的關倉分子分母都排除', () => {
+  const day = (usd: number) => ({ date: 'd', usd, capitalUsd: 1000, hours: 24, capHours: 24000 })
+  const base = { symbol: 'X', label: 'X', deposit_usd: 1000, est: null, switchHint: null }
+  const open = { ...base, closed_at: null, actual: { fees_cum_usd: 1, value_usd: 1000, net_usd: 1, days: 1, in_range: true, fees_withdrawn_usd: 0, fees_reinvested_usd: 0 }, dailyFees: [day(1)] }
+  expect(formatApr([open] as any)).toContain('手續費 37%')   // 1 / 1000 × 365 = 36.5%
+  const closed = { ...base, closed_at: '2026-10-01', actual: { fees_cum_usd: 0, value_usd: 0, net_usd: 0, days: 1, in_range: false, fees_withdrawn_usd: 0, fees_reinvested_usd: 0 }, dailyFees: [day(1)], closeTailCapHours: 24000, journal: [{ kind: 'close', data: { net_usd: 3, fees_lifetime_usd: 2 } }] }
+  expect(lifetimeTotals([open, closed] as any).rows.map(r => r.capHours)).toEqual([24000, 48000])   // 關倉頭寸含最後快照到關倉那段
+  expect(formatApr([open, closed] as any)).toContain('手續費 37%')   // (1+2) / (1000×1 + 1000×2) × 365
+  const noSnap = { ...base, closed_at: '2026-09-01', actual: null, journal: [{ kind: 'close', data: { net_usd: 50, fees_lifetime_usd: 50 } }] }
+  const a = formatApr([open, noSnap] as any)!
+  expect(a).toContain('手續費 37%'); expect(a).toContain('不含 1 筆無本金時數')
+  expect(formatFeesTotal([open, noSnap] as any)).toContain('累積手續費 +$51.00')   // 累積照算
 })

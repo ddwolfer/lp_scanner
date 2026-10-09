@@ -123,8 +123,9 @@ it('D67：換池提示用頭寸區間在兩池逐小時重放，只比交易日�
   const base = { is_weekday: 1, tvl_usd: 1_000_000, volume_24h_usd: 1000, fees_24h_usd: 3, price_usd: 10, price_ref_usd: 10, price_dev_pct: 0, swap_count: 5, age_days: 50, vol7_avg_usd: 0, vol7_cv: 0, raw_apr: 0, excluded: 0, flags: [] as string[] }
   for (const d of ['2026-09-23', '2026-09-24', '2026-09-25', '2026-09-26', '2026-09-27']) for (const pid of ['0x1', '0x2']) writeSnapshot(db, { ...base, pool_id: pid, date: d })
   // UTC 09-22（二）到 09-26（六）每天 3 小時；0x2 每小時費是 0x1 的兩倍；週六那天不算
-  const hrs = (fee: number) => ['2026-09-22', '2026-09-23', '2026-09-24', '2026-09-25', '2026-09-26'].flatMap(d => [1, 2, 3].map(h => ({ ts: Date.parse(`${d}T0${h}:00:00Z`) / 1000, priceUsd: 10, volumeUsd: 100, feesUsd: fee, liquidity: '1', swapCount: 1 })))
-  writeHourly(db, '0x1', hrs(1)); writeHourly(db, '0x2', hrs(2))
+  // 池子流動性約是頭寸的 10 倍（佔比約 10%，D73 的容量門檻 25% 內）
+  const hrs = (fee: number) => ['2026-09-22', '2026-09-23', '2026-09-24', '2026-09-25', '2026-09-26'].flatMap(d => [1, 2, 3].map(h => ({ ts: Date.parse(`${d}T0${h}:00:00Z`) / 1000, priceUsd: 10, volumeUsd: 100, feesUsd: fee, liquidity: '12000000000000000', swapCount: 1 })))
+  writeHourly(db, '0x1', hrs(10)); writeHourly(db, '0x2', hrs(20))
   createPosition(db, { pool_id: '0x1', label: 'held', range_lower: 7.5, range_upper: 12.5, deposit_usd: 1000, opened_at: '2026-09-20T00:00:00Z' })
   const h = listPositions(db)[0].switchHint!
   expect(h.heldDays).toBe(4)                                  // 快照 09-23..09-26 → UTC 09-22..09-25 交易日；09-27 快照對應週六
@@ -165,4 +166,14 @@ it('dailyFees 的 capHours 在加倉時點切段；liveBasis 用現在的投入'
   const p = listPositions(db)[0] as any
   expect(p.dailyFees[0].capHours).toBeCloseTo(1000 * 23 + 10000 * 1)
   expect(p.liveBasis.capital_usd).toBe(10000)
+})
+
+it('D73：關倉當天沒有 taken_at 的快照，本金時數截到關倉時刻', () => {
+  const db = seed()
+  const id = createPosition(db, { pool_id: '0x1', label: 'c', range_lower: 7.5, range_upper: 12.5, deposit_usd: 1000, opened_at: '2026-09-01T00:00:00Z' })
+  db.prepare(`UPDATE positions SET notes=? WHERE id=?`).run(JSON.stringify({ source: 'onchain', tokenId: '7' }), id)
+  db.prepare(`INSERT INTO position_snapshots(position_id,date,value_usd,fees_cum_usd,in_range,taken_at) VALUES (?,?,?,?,1,NULL)`).run(id, '2026-09-01', 1000, 1)   // 會被當成 9/1 23:59:59 台北
+  db.prepare(`UPDATE positions SET closed_at=? WHERE id=?`).run('2026-09-01T06:00:00Z', id)
+  const p = listPositions(db).find(x => x.id === id) as any
+  expect(p.dailyFees[0].capHours).toBeCloseTo(1000 * 6)   // 只算到 06:00Z
 })

@@ -34,7 +34,8 @@
     "tvl_multiple": 20,
     "tvl_stability": 0.5,
     "cold_usd_per_day": 1,
-    "cold_min_days": 5
+    "cold_min_days": 5,
+    "max_share": 0.25
   },
   "economics": {
     "gas_usd_per_tx": 0.05,

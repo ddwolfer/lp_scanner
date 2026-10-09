@@ -266,16 +266,31 @@ export function formatPositions(list: ReturnType<typeof listPositions>): string[
   })
 }
 /** D66：年化 = 累積金額 ÷ Σ(投入 × 持有天數) × 365，投入用目前 deposit_usd（加倉後含加倉），天數用鏈上快照的持有天數。手續費與含價差各一個 */
+/** D73：累積與年化共用的逐頭寸加總。開著的 = 未實現；已關閉 = 已實現（close 日誌優先）。capHours = 本金 × 小時（含已關閉頭寸最後快照到關倉那段）；沒有快照的已關閉頭寸 capHours = null */
+export function lifetimeTotals(list: ReturnType<typeof listPositions>): { rows: { open: boolean; fees: number; net: number; est: boolean; capHours: number | null }[] } {
+  const feesOf = (p: any) => p.actual!.fees_cum_usd + p.actual!.fees_withdrawn_usd + p.actual!.fees_reinvested_usd   // 未領 + 領出 + 再投入（與卡片「手續費合計」同口徑）
+  const capOf = (p: any): number | null => p.dailyFees?.length ? p.dailyFees.reduce((x: number, d: any) => x + (d.capHours ?? (d.capitalUsd ?? p.deposit_usd) * d.hours), 0) + (p.closeTailCapHours ?? 0) : null
+  const rows: { open: boolean; fees: number; net: number; est: boolean; capHours: number | null }[] = []
+  for (const p of list as any[]) {
+    if (!p.closed_at) { if (p.actual) rows.push({ open: true, fees: feesOf(p), net: p.actual.net_usd, est: false, capHours: capOf(p) ?? p.deposit_usd * Math.max(1, p.actual.days) * 24 }); continue }
+    // 先看 close 日誌，日誌齊全就不需要快照；只有退回估算時才要求有快照（Codex review）
+    const j = [...(p.journal ?? [])].reverse().find((x: any) => x.kind === 'close' && x.data && x.data.net_usd !== undefined)
+    if (j && j.data.fees_lifetime_usd !== undefined) { rows.push({ open: false, fees: Number(j.data.fees_lifetime_usd), net: Number(j.data.net_usd), est: false, capHours: capOf(p) }); continue }
+    if (!p.actual) continue
+    rows.push({ open: false, fees: feesOf(p), net: j ? Number(j.data.net_usd) : p.actual.net_usd, est: true, capHours: capOf(p) })
+  }
+  return { rows }
+}
+/** D66 → D73：年化 = 全部頭寸（含已關閉）的累積 ÷ 本金天數 × 365，與累積行同口徑。沒有本金時數的頭寸分子分母都排除並標示 */
 export function formatApr(list: ReturnType<typeof listPositions>): string | null {
-  const open = list.filter(p => !p.closed_at && p.actual)
-  // 本金天數按當時投入累計（每筆快照區間的投入 × 時數），加減倉不會追溯改寫（Codex review D69）
-  const capDays = open.reduce((a, p) => a + ((p as any).dailyFees?.length ? (p as any).dailyFees.reduce((x: number, d: any) => x + (d.capHours ?? (d.capitalUsd ?? p.deposit_usd) * d.hours) / 24, 0) : p.deposit_usd * Math.max(1, p.actual!.days)), 0)
+  const { rows } = lifetimeTotals(list)
+  const used = rows.filter(r => r.capHours !== null && r.capHours > 0), skipped = rows.filter(r => r.capHours === null && (r.fees !== 0 || r.net !== 0))
+  const capDays = used.reduce((a, r) => a + (r.capHours as number) / 24, 0)   // 本金 × 小時 ÷ 24 = 本金 × 天
   if (capDays <= 0) return null
-  const feesCum = open.reduce((a, p) => a + p.actual!.fees_cum_usd + p.actual!.fees_withdrawn_usd + p.actual!.fees_reinvested_usd, 0)
-  const netCum = open.reduce((a, p) => a + p.actual!.net_usd, 0)
-  const dep = open.reduce((a, p) => a + p.deposit_usd, 0)
+  const fees = used.reduce((a, r) => a + r.fees, 0), net = used.reduce((a, r) => a + r.net, 0)
+  const dep = list.filter(p => !p.closed_at && p.actual).reduce((a, p) => a + p.deposit_usd, 0)
   const pct = (v: number) => `${v >= 0 ? '' : '−'}${Math.abs(v * 365 / capDays * 100).toFixed(0)}%`
-  return `年化 手續費 ${pct(feesCum)} · 含價差 ${pct(netCum)}（投入 $${dep.toFixed(0)}，加權 ${(capDays / dep).toFixed(1)} 天）`
+  return `年化 手續費 ${pct(fees)} · 含價差 ${pct(net)}（含已關閉；目前投入 $${dep.toFixed(0)}，加權 ${dep > 0 ? (capDays / dep).toFixed(1) : '—'} 天${skipped.length ? `，不含 ${skipped.length} 筆無本金時數` : ''}）`
 }
 /** D70：今天的錢包對淨入金行（沒設定對手地址就不顯示） */
 export function walletLine(db: Database.Database, date: string): string | null {
@@ -293,16 +308,12 @@ export function formatFeesTotal(list: ReturnType<typeof listPositions>): string 
   const capHours = withDay.reduce((a, p) => a + ((p.feesLastDay as any).capHours ?? (p.feesLastDay!.capitalUsd ?? p.deposit_usd) * p.feesLastDay!.hours), 0)
   const hours = withDay.length ? withDay.reduce((a, p) => a + p.feesLastDay!.hours, 0) / withDay.length : 0
   const perDay = capHours > 0 ? usd / capHours * 24 : null
-  // D70：累積含已關閉頭寸。開著的 = 未實現；關閉的 = 已實現，優先用 close 日誌明寫的 net_usd / fees_lifetime_usd（實際撤出金額），沒有才用最後快照並標「含估計」
-  const feesOf = (p: any) => p.actual!.fees_cum_usd + p.actual!.fees_withdrawn_usd + p.actual!.fees_reinvested_usd   // 未領 + 領出 + 再投入（與卡片「手續費合計」同口徑）
-  // 先看 close 日誌，日誌齊全就不需要快照；只有退回估算時才要求有快照（Codex review）
-  const closed = list.filter(p => p.closed_at).flatMap((p: any) => { const j = [...(p.journal ?? [])].reverse().find((x: any) => x.kind === 'close' && x.data && x.data.net_usd !== undefined)
-    if (j && j.data.fees_lifetime_usd !== undefined) return [{ net: Number(j.data.net_usd), fees: Number(j.data.fees_lifetime_usd), est: false }]
-    if (!p.actual) return []
-    return [{ net: j ? Number(j.data.net_usd) : p.actual.net_usd, fees: feesOf(p), est: true }] })
-  if (!open.length && !closed.length) return null   // 全部關倉時仍顯示累積（Codex review）
-  const feesCum = open.reduce((a, p) => a + feesOf(p), 0) + closed.reduce((a, c) => a + c.fees, 0)
-  const unreal = open.reduce((a, p) => a + p.actual!.net_usd, 0), real = closed.reduce((a, c) => a + c.net, 0)
+  // D70/D73：累積含已關閉頭寸，與年化共用 lifetimeTotals
+  const { rows } = lifetimeTotals(list)
+  if (!rows.length) return null   // 全部關倉時仍顯示累積（Codex review）
+  const feesCum = rows.reduce((a, r) => a + r.fees, 0)
+  const unreal = rows.filter(r => r.open).reduce((a, r) => a + r.net, 0), real = rows.filter(r => !r.open).reduce((a, r) => a + r.net, 0)
+  const closed = rows.filter(r => !r.open)
   const day = withDay.length ? `Σ 昨日費 ${money(usd)}${perDay !== null ? `（${(perDay * 100).toFixed(2)}%/日${Math.abs(hours - 24) > 3 ? `，${Math.round(hours)}h` : ''}）` : ''} · ` : ''
   return `${day}累積手續費 ${money(feesCum)} · 累積淨 ${money(real + unreal)}（已實現 ${money(real)}、未實現 ${money(unreal)}${closed.some(c => c.est) ? '，含估計' : ''}）`
 }

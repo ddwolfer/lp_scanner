@@ -80,3 +80,22 @@ describe('poolSwitch 組裝', () => {
     expect(weekdayPace(snaps.slice(0, 4)).pace).toBeNull()
   })
 })
+
+import { replayStats } from '../scanner/metrics/poolSwitch.js'
+describe('D73 容量：現價附近太薄的池不比', () => {
+  it('replayStats 回傳按手續費加權的佔比，極端小時不會被平均掩蓋', () => {
+    const t0 = Date.parse('2026-09-28T00:00:00Z') / 1000   // 週一
+    // 23 小時池子很厚（你佔約 1%），1 小時池子極薄（你佔約 99%）且手續費大
+    const hours = Array.from({ length: 24 }, (_, h) => ({ ts: t0 + h * 3600, priceUsd: 100, feesUsd: h === 5 ? 100 : 1, liquidity: h === 5 ? '1' : String(10n ** 30n) }))
+    const st = replayStats(hours, 1000, 90, 110, new Set(['2026-09-28']))
+    expect(st.feeWeightedShare!).toBeGreaterThan(0.9)
+  })
+  it('替代池加權佔比 > 25% → 不列入比較；被容量排除時不判量已冷', () => {
+    const thin = alt('thin', [30, 30, 30, 30, 30], { share: 0.9 })
+    expect(switchHint({ ...base, alts: [thin] }).verdict).toBe('stay')
+    expect(switchHint({ ...base, alts: [thin] }).best).toBeNull()
+    const quiet = { ...base, held: daily([0.3, 0.3, 0.3, 0.3, 0.3]), weekdayPace: 0.4 }
+    expect(switchHint({ ...quiet, alts: [thin] }).verdict).toBe('stay')
+    expect(switchHint({ ...quiet, alts: [] }).verdict).toBe('cold')
+  })
+})

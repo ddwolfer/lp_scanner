@@ -9,7 +9,7 @@ import { L_HUMAN_TO_RAW } from '../scanner/metrics/lp-math.js'
 import { taipeiDate } from '../scanner/time.js'
 import { loadScoring } from '../config/chain.js'
 import { feeDelta } from '../scanner/metrics/weeklyFees.js'
-import { switchHint, replayDaily, weekdayPace, snapshotToUtcDay, type SwitchHint, type AltPool } from '../scanner/metrics/poolSwitch.js'
+import { switchHint, replayDaily, replayStats, weekdayPace, snapshotToUtcDay, type SwitchHint, type AltPool } from '../scanner/metrics/poolSwitch.js'
 /** 一個池最近幾天的快照摘要（D65/D67）：ok=false 的日子（沒抓、抓失敗、總費口徑）不能拿來比 */
 export interface PoolSeries { poolId: string; label: string; swapFeeRate: number; hookKind: 'none' | 'fee_only' | 'liquidity'; createdAt: string | null; days: { date: string; feesUsd: number; tvlUsd: number | null; ok: boolean }[] }
 
@@ -179,6 +179,7 @@ export function listPositions(db: Database.Database) {
     const flows = journal.filter(j => j.kind === 'adjust' && j.data && j.data.cash_added_usd !== undefined).map(j => ({ ts: String(j.ts), usd: Number(j.data.cash_added_usd) }))
     const capitalAt = (iso: string) => r.deposit_usd - flows.filter(f => Date.parse(f.ts) > Date.parse(iso)).reduce((a, f) => a + f.usd, 0)
     /** 區間內的「投入 × 小時」：在加減倉時點切段，不是拿區間結束時的投入乘整段（Codex review D69） */
+    const clampClose = (iso: string) => r.closed_at && Date.parse(iso) > Date.parse(r.closed_at) ? r.closed_at : iso
     const capitalHours = (fromIso: string, toIso: string) => {
       const a = Date.parse(fromIso), b = Date.parse(toIso); if (!(b > a)) return 0
       const cuts = [a, ...flows.map(f => Date.parse(f.ts)).filter(t => t > a && t < b).sort((x, y) => x - y), b]
@@ -221,7 +222,7 @@ export function listPositions(db: Database.Database) {
     const fsnap = (sn: any) => ({ fees_cum_usd: sn.fees_cum_usd, fees_stock: sn.fees_stock ?? null, fees_usdg: sn.fees_usdg ?? null, price_usd: sn.price_usd ?? null, collected: collectedBy(sn) })
     const dailyFees = notes?.source === 'onchain' ? snaps.map((sn, k) => ({ date: sn.date, usd: feeDelta(k ? fsnap(snaps[k - 1]) : null, fsnap(sn)), capitalUsd: capitalAt(snapIso(sn)),
       hours: Math.max(0, (Date.parse(snapIso(sn)) - Date.parse(k ? snapIso(snaps[k - 1]) : r.opened_at)) / 3600000),
-      capHours: capitalHours(k ? snapIso(snaps[k - 1]) : r.opened_at, snapIso(sn)) })) : []   // 當時的投入，加減倉後歷史週不會被改寫（Codex review）
+      capHours: capitalHours(k ? snapIso(snaps[k - 1]) : r.opened_at, clampClose(snapIso(sn))) })) : []   // 關倉當天的快照沒有 taken_at 會被當成 23:59:59，截到關倉時刻（Codex review D73）   // 當時的投入，加減倉後歷史週不會被改寫（Codex review）
     // D66：昨日手續費 = 最近兩筆快照之間「已賺總額」的差（未領 + 領過的）；只有一筆快照 → 從開倉起算
     let feesLastDay: { usd: number; hours: number; from: string; to: string; capitalUsd: number; capHours: number } | null = null
     if (latest && !r.closed_at && notes?.source === 'onchain') {
@@ -238,17 +239,19 @@ export function listPositions(db: Database.Database) {
         const validUtc = (ps: PoolSeries) => new Set(ps.days.filter(d => d.ok).map(d => snapshotToUtcDay(d.date)))
         // 共同起點：所有池只取視窗起點之後的小時，並用自己池在起點的價格建倉（D69）
         const heldH = loadHourly(db, hs.poolId, 24 * 9); const t0 = heldH.length ? heldH[0].ts : 0; const P0 = heldH.length ? heldH[0].priceUsd : undefined
-        const replay = (ps: PoolSeries) => replayDaily((ps.poolId === hs.poolId ? heldH : loadHourly(db, ps.poolId, 24 * 9)).filter(h => h.ts >= t0), cap, r.range_lower, r.range_upper, validUtc(ps), P0)
+        const replayS = (ps: PoolSeries) => replayStats((ps.poolId === hs.poolId ? heldH : loadHourly(db, ps.poolId, 24 * 9)).filter(h => h.ts >= t0), cap, r.range_lower, r.range_upper, validUtc(ps), P0)
+        const replay = (ps: PoolSeries) => replayS(ps).daily
         const asOf = hs.days.length ? hs.days[hs.days.length - 1].date : null
         const altPools: AltPool[] = alts.filter(a => a.hookKind !== 'liquidity').map(a => { const tv = a.days.map(d => d.tvlUsd).filter((x): x is number => x !== null)
           return { poolId: a.poolId, label: a.hookKind === 'fee_only' ? a.label.replace(/~[\d.]+%|動態/, '動態') : a.label, hookKind: a.hookKind as 'none' | 'fee_only',
             ageDays: a.createdAt && asOf ? (Date.parse(asOf) - Date.parse(a.createdAt.slice(0, 10))) / 86400000 : null,
-            tvlNow: tv.length ? tv[tv.length - 1] : null, tvlMin7: tv.length ? Math.min(...tv) : null, tvlMax7: tv.length ? Math.max(...tv) : null, daily: replay(a) } })
+            tvlNow: tv.length ? tv[tv.length - 1] : null, tvlMin7: tv.length ? Math.min(...tv) : null, tvlMax7: tv.length ? Math.max(...tv) : null, ...(() => { const both = new Set([...validUtc(a)].filter(d => validUtc(hs).has(d)))   // 佔比只算兩池都有效的共同交易日，跟報酬比較同一批日子（Codex review）
+            return { daily: replayS(a).daily, share: replayStats((loadHourly(db, a.poolId, 24 * 9)).filter(h => h.ts >= t0), cap, r.range_lower, r.range_upper, both, P0).feeWeightedShare } })() } })
         let acc = 0; const wp = weekdayPace(dailyFees.map(d => ({ date: d.date, earned: (acc += d.usd) })))   // D69：與每日手續費同口徑
         switchHintOut = switchHint({ held: replay(hs), alts: altPools, depositUsd: cap, weekdayPace: wp.pace, tradingDaysHeld: wp.days, inRange: actual ? actual.in_range : true, cfg: cfgAll.switch_hint })
       } }
     return { ...r, notes_json: notes, journal, breakeven, switchHint: switchHintOut, feesLastDay, dailyFees, est: simCap.length ? (() => { const e = simCap[simCap.length - 1]; const P = hours[hours.length - 1].priceUsd; return { value_usd: e.valueH, fees_cum_usd: e.grossFees, fees_reinvested_usd: e.reinvested, capital_usd: e.capital, in_range: P >= r.range_lower && P <= r.range_upper, net_usd: e.net, price: P, hours: simCap.length } })() : null,
-      actual, liveBasis: { capital_usd: capitalAt(new Date().toISOString()), withdrawn_usd: withdrawnBy(new Date().toISOString()) }, history, capitalMarks, feesWithdrawnUsd: withdrawnBy(latest ? snapIso(latest) : new Date().toISOString()), feesReinvestedUsd: reinvested, curve: simCap.map(e => ({ ts: e.ts, net: e.net })), final: finalSnap ? { value_usd: finalSnap.value_usd, fees_cum_usd: finalSnap.fees_cum_usd } : null }
+      actual, closeTailCapHours: r.closed_at && snaps.length ? capitalHours(snapIso(snaps[snaps.length - 1]), r.closed_at) : 0, liveBasis: { capital_usd: capitalAt(new Date().toISOString()), withdrawn_usd: withdrawnBy(new Date().toISOString()) }, history, capitalMarks, feesWithdrawnUsd: withdrawnBy(latest ? snapIso(latest) : new Date().toISOString()), feesReinvestedUsd: reinvested, curve: simCap.map(e => ({ ts: e.ts, net: e.net })), final: finalSnap ? { value_usd: finalSnap.value_usd, fees_cum_usd: finalSnap.fees_cum_usd } : null }
   })
 }
 

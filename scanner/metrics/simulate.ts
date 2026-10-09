@@ -51,7 +51,7 @@ export function simulateAll(hours: SimHour[], sigma: number | null): { sim: SimJ
 /** D62：帶資本事件的模擬。區間固定（同一 NFT），事件時點以當時價格把新增現金換成流動性加進去（減倉為負）；
  *  HODL 基準跟著累加當時的代幣數量。回傳每小時 { ts, valueH, cumFees, capital, net } */
 export interface CapitalEvent { ts: number; usd: number; kind?: 'capital' | 'reinvest' }   // reinvest：已賺的費存回部位 → 加流動性、從累計費扣掉、投入不變
-export function simulateWithCapital(hours: SimHour[], D0: number, Pl: number, Pu: number, events: CapitalEvent[], P0?: number): { ts: number; valueH: number; cumFees: number; grossFees: number; reinvested: number; capital: number; net: number }[] {
+export function simulateWithCapital(hours: SimHour[], D0: number, Pl: number, Pu: number, events: CapitalEvent[], P0?: number): { ts: number; valueH: number; cumFees: number; grossFees: number; reinvested: number; capital: number; net: number; share: number }[] {
   if (!hours.length) return []
   const ev = [...events].sort((a, b) => a.ts - b.ts); let ei = 0
   let L = liquidityForDeposit(D0, P0 ?? hours[0].priceUsd, Pl, Pu), capital = D0, cum = 0, reinv = 0   // P0：指定建倉價（D69，各池重放用同一個部位）
@@ -66,6 +66,6 @@ export function simulateWithCapital(hours: SimHour[], D0: number, Pl: number, Pu
     const share = inRange && Lpool !== null && Lraw > 0 ? Lraw / (Lpool + Lraw) : 0
     cum += share * row.feesUsd
     const valueH = positionValue(L, row.priceUsd, Pl, Pu)
-    return { ts: row.ts, valueH, cumFees: cum, grossFees: cum + reinv, reinvested: reinv, capital, net: valueH + cum - capital }   // grossFees：與實際的「手續費合計」同口徑
+    return { ts: row.ts, valueH, cumFees: cum, grossFees: cum + reinv, reinvested: reinv, capital, net: valueH + cum - capital, share }   // grossFees：與實際的「手續費合計」同口徑；share：當小時佔活躍流動性的比例（D73）
   })
 }
