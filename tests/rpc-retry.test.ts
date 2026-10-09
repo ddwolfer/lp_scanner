@@ -78,3 +78,13 @@ describe('403 共用冷卻（D64）', () => {
     await expect(rpc.call(async () => { n++; throw err({ status: 400, message: 'bad' }) })).rejects.toThrow('bad'); expect(n).toBe(1)
   })
 })
+
+import { ApiUsage as U2 } from '../scanner/sources/usage.js'
+it('D72：403 次數與等待秒數記進 usage', async () => {
+  let t = 0; const usage = new U2(); let n = 0
+  const rpc = makeRpc({ usage, minGapMs: 0, blockCoolMs: 30_000, sleepFn: async ms => { t += ms }, now: () => t })
+  const err = Object.assign(new Error('blocked'), { status: 403 })
+  await rpc.call(async () => { n++; if (n <= 2) throw err; return 1 })
+  const u = usage.toJSON() as any
+  expect(u.rpc_403).toBe(2); expect(u.rpc_403_wait_s).toBeGreaterThanOrEqual(60)
+})

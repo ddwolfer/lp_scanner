@@ -15,3 +15,9 @@ describe('watchdog assess', () => {
   it('以當天最後一次為準：先失敗後成功 → 靜默', () => expect(assess({ ...base, runsToday: [run({ ok: 0, alert_sent: 0, started_at: '2026-09-10T23:30:00Z' }), run({ started_at: '2026-09-11T02:00:00Z', finished_at: '2026-09-11T04:00:00Z' })] }, now, date)).toBeNull())
   it('DB 打不開 → 無法確認也要報', () => expect(assess({ ...base, runsToday: [], dbError: 'SQLITE_CANTOPEN' }, now, date)?.text).toMatch(/無法確認/))
 })
+
+it('D72：啟動後 2.5 小時還沒結束就報卡住（10:30 巡檢不再因差幾秒漏報）', () => {
+  const run = { started_at: '2026-10-08T23:30:06.083Z', finished_at: null, ok: null, degraded: null, alert_sent: null, error: null, pools_scanned: null }
+  const a = assess({ runsToday: [run], snapshotsToday: 100, swapFailedToday: 0, swapPoolsToday: 10 }, new Date('2026-10-09T02:30:01.674Z'), '2026-10-09')
+  expect(a?.kinds).toEqual(['stuck']); expect(a!.text).toContain('RPC_URL')
+})

@@ -50,7 +50,7 @@ export interface Rpc {
 }
 export function makeRpc(o: { usage: ApiUsage; url?: string; concurrency?: number; minGapMs?: number; source?: string; blockCoolMs?: number; blockMaxMs?: number; sleepFn?: (ms: number) => Promise<void>; now?: () => number }): Rpc {
   const sleepMs = o.sleepFn ?? sleep; const now = o.now ?? Date.now
-  const url = o.url ?? CHAIN.publicRpc
+  const url = o.url ?? process.env.RPC_URL ?? CHAIN.publicRpc   // D72：公用 RPC 長時間 403 時可臨時改走其他節點（例如 Alchemy），預設不變
   const source = o.source ?? 'rpc'
   const client = createPublicClient({
     chain: { id: CHAIN.id, name: CHAIN.name, nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 }, rpcUrls: { default: { http: [url] } } },
@@ -68,7 +68,7 @@ export function makeRpc(o: { usage: ApiUsage; url?: string; concurrency?: number
       for (let attempt = 0; ; ) {
         // 等冷卻與最小間隔後都要再看一次 blockedUntil：睡眠期間另一個併發請求可能又收到 403 把冷卻延長（Codex code review）
         for (;;) {
-          const cool = blockedUntil - now(); if (cool > 0) { await sleepMs(cool); continue }
+          const cool = blockedUntil - now(); if (cool > 0) { o.usage.inc(source + '_403_wait_s', Math.round(cool / 1000)); await sleepMs(cool); continue }   // D72：記錄因封鎖等了幾秒（併發時各請求各算一次，是上限估計）
           const wait = lastStart + minGapMs - now(); if (wait > 0) { await sleepMs(wait); continue }
           break
         }
@@ -78,6 +78,7 @@ export function makeRpc(o: { usage: ApiUsage; url?: string; concurrency?: number
         catch (e) {
           if (isBlocked(e)) {
             if (!blockStart) blockStart = now()
+            o.usage.inc(source + '_403')   // D72：被 403 擋的次數，寫進 scan_runs.api_calls
             blockedUntil = Math.max(blockedUntil, now() + blockCoolMs + Math.random() * 5000)   // 先記冷卻再決定放棄：後面的呼叫也要等
             if (now() - blockStart >= blockMaxMs) throw e
             if (process.env.RPC_DEBUG) console.error(`[rpc] 403 blocked, cooling ${Math.round((blockedUntil - now()) / 1000)}s`)

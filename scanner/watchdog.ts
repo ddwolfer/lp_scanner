@@ -4,14 +4,14 @@ export interface Facts { runsToday: RunRow[]; snapshotsToday: number; swapFailed
 const FIX = '補跑：cd ~/AI/lp_scanner && RPC_CONCURRENCY=2 RPC_GAP_MS=750 pnpm scan'
 export interface Assessment { text: string; kinds: string[] }
 /** 回傳警報（文字 + 問題種類，種類供同日去重）；null = 一切正常，保持靜默。 */
-export function assess(f: Facts, now: Date, date: string, stuckHours = 3): Assessment | null {
+export function assess(f: Facts, now: Date, date: string, stuckHours = 2.5): Assessment | null {   // D72：原本 3 小時，10:30 巡檢距 07:30 啟動差幾秒不到 3 小時而漏報；正常掃描 1 到 2.4 小時
   const gaps: string[] = []; const kinds: string[] = []; const push = (kind: string, g: string) => { kinds.push(kind); gaps.push(g) }
   if (f.dbError) return { text: `🩺 巡檢 ${date}：無法確認掃描狀態（打不開資料庫：${f.dbError.slice(0, 80)}）。請人工看 logs/scan.log。`, kinds: ['db_error'] }
   const runs = [...f.runsToday].sort((a, b) => a.started_at.localeCompare(b.started_at)); const last = runs[runs.length - 1]
   if (!last) push('not_started', `今天沒有任何掃描啟動（launchd 沒觸發？用 launchctl list | grep lp-scanner 查）→ ${FIX}`)
   else if (!last.finished_at) {
     const hrs = (now.getTime() - new Date(last.started_at).getTime()) / 3.6e6
-    if (hrs >= stuckHours) push('stuck', `最後一次掃描 ${last.started_at.slice(11, 16)}Z 啟動，${hrs.toFixed(1)} 小時還沒結束，可能卡住 → 檢查 \`pgrep -fl scanner/run\`，必要時 kill 後 ${FIX}`)
+    if (hrs >= stuckHours) push('stuck', `最後一次掃描 ${last.started_at.slice(11, 16)}Z 啟動，${hrs.toFixed(1)} 小時還沒結束，可能卡住或被公用 RPC 以 403 限速 → 看 logs/scan.log 最後的進度；被擋時可 kill 後改用 Alchemy：RPC_URL=https://robinhood-mainnet.g.alchemy.com/v2/<ALCHEMY_KEY> RPC_CONCURRENCY=3 RPC_GAP_MS=150 pnpm scan`)
     else return null   // 還在跑，下一次巡檢再看
   }
   else if (last.ok === 0) { if (!last.alert_sent) push('failed_unnotified', `最後一次掃描失敗且當時通知沒送出：${(last.error ?? '').split('\n')[0].slice(0, 120)} → ${FIX}`) }
