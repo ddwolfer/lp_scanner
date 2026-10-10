@@ -19,5 +19,5 @@ describe('watchdog assess', () => {
 it('D72：啟動後 2.5 小時還沒結束就報卡住（10:30 巡檢不再因差幾秒漏報）', () => {
   const run = { started_at: '2026-10-08T23:30:06.083Z', finished_at: null, ok: null, degraded: null, alert_sent: null, error: null, pools_scanned: null }
   const a = assess({ runsToday: [run], snapshotsToday: 100, swapFailedToday: 0, swapPoolsToday: 10 }, new Date('2026-10-09T02:30:01.674Z'), '2026-10-09')
-  expect(a?.kinds).toEqual(['stuck']); expect(a!.text).toContain('RPC_URL')
+  expect(a?.kinds).toEqual(['stuck']); expect(a!.text).toContain('RPC_GAP_MS=400'); expect(a!.text).not.toContain('RPC_URL')
 })

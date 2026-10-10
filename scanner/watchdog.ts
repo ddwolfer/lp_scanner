@@ -11,7 +11,7 @@ export function assess(f: Facts, now: Date, date: string, stuckHours = 2.5): Ass
   if (!last) push('not_started', `今天沒有任何掃描啟動（launchd 沒觸發？用 launchctl list | grep lp-scanner 查）→ ${FIX}`)
   else if (!last.finished_at) {
     const hrs = (now.getTime() - new Date(last.started_at).getTime()) / 3.6e6
-    if (hrs >= stuckHours) push('stuck', `最後一次掃描 ${last.started_at.slice(11, 16)}Z 啟動，${hrs.toFixed(1)} 小時還沒結束，可能卡住或被公用 RPC 以 403 限速 → 看 logs/scan.log 最後的進度；被擋時可 kill 後改用 Alchemy：RPC_URL=https://robinhood-mainnet.g.alchemy.com/v2/<ALCHEMY_KEY> RPC_CONCURRENCY=3 RPC_GAP_MS=150 pnpm scan`)
+    if (hrs >= stuckHours) push('stuck', `最後一次掃描 ${last.started_at.slice(11, 16)}Z 啟動，${hrs.toFixed(1)} 小時還沒結束，可能卡住、網路斷線，或被公用 RPC 以 403 限速 → 看 logs/scan.log 最後的進度與 rpc_403 次數；頭寸與手續費可先跑 pnpm positions 取得，掃描被擋時放慢重跑：RPC_CONCURRENCY=2 RPC_GAP_MS=400 pnpm scan（Alchemy 免費方案 getLogs 只能 10 個區塊，不能拿來掃描，D72）`)
     else return null   // 還在跑，下一次巡檢再看
   }
   else if (last.ok === 0) { if (!last.alert_sent) push('failed_unnotified', `最後一次掃描失敗且當時通知沒送出：${(last.error ?? '').split('\n')[0].slice(0, 120)} → ${FIX}`) }
