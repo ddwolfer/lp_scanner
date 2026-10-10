@@ -21,3 +21,11 @@ export function formatDailySummary(i: SummaryInput): string {
   if (i.dashboardUrl) lines.push('', `📈 ${i.dashboardUrl}`)
   return lines.join('\n')
 }
+
+/** D75：只有頭寸的日報（週末或外出時，不跑完整掃描）。positions 與 formatDailySummary 同格式：頭寸行加 bullet，Σ 前空一行 */
+export function formatPositionsOnly(i: { date: string; weekdayZh: string; positions: string[]; note?: string; dashboardUrl?: string }): string {
+  const lines = [`📊 LP 頭寸日報 ${i.date} (${i.weekdayZh})`, ...(i.note ? [i.note] : []), '', '💼 我的頭寸',
+    ...i.positions.flatMap(p => p.startsWith('Σ') ? ['', p] : p.startsWith('  ') || p.startsWith('年化') || p.startsWith('錢包') || p.startsWith('⚠️ 錢包') ? [p] : [`- ${p}`])]
+  if (i.dashboardUrl) lines.push('', `📈 ${i.dashboardUrl}`)
+  return lines.join('\n')
+}

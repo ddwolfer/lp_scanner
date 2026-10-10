@@ -103,3 +103,9 @@ it('D73：年化含已關閉頭寸；單位：$1,000 放 24 小時賺 $1 → 年
   expect(a).toContain('手續費 37%'); expect(a).toContain('不含 1 筆無本金時數')
   expect(formatFeesTotal([open, noSnap] as any)).toContain('累積手續費 +$51.00')   // 累積照算
 })
+
+import { formatPositionsOnly } from '../scanner/notify/summary.js'
+it('D75：頭寸日報格式（補跑註記、Σ 前空行、合計與錢包行不加 bullet）', () => {
+  const t = formatPositionsOnly({ date: '2026-10-11', weekdayZh: '日', positions: ['META #1 (3d)  昨日費 +$1.00  ⚖️ 留', 'Σ 昨日費 +$1.00', '年化 手續費 40%', '錢包 $1 vs OKX 淨入金 $1 → +$0'], note: '（08:00 補跑）', dashboardUrl: 'http://x' })
+  expect(t).toBe('📊 LP 頭寸日報 2026-10-11 (日)\n（08:00 補跑）\n\n💼 我的頭寸\n- META #1 (3d)  昨日費 +$1.00  ⚖️ 留\n\nΣ 昨日費 +$1.00\n年化 手續費 40%\n錢包 $1 vs OKX 淨入金 $1 → +$0\n\n📈 http://x')
+})
