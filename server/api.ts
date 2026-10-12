@@ -8,10 +8,13 @@ import { loadScoring } from '../config/chain.js'
 import { getMeta, setMeta } from '../db/index.js'
 import { mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { listNotes, readNote } from './notes.js'
 const PositionSchema = z.object({ pool_id: z.string().min(3), label: z.string().min(1), range_lower: z.number().positive(), range_upper: z.number().positive(), deposit_usd: z.number().positive(), opened_at: z.string().min(10), notes: z.string().optional() })
 const JournalSchema = z.object({ kind: z.enum(['open', 'note', 'adjust', 'collect', 'close', 'review']), text: z.string().default(''), data: z.unknown().optional(),
   images: z.array(z.object({ name: z.string().max(200), dataUrl: z.string().regex(/^data:image\/(png|jpeg|webp|gif);base64,/) })).max(10).optional() })
 const IMG_DIR = 'data/positions'
+const NOTES_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'notes')   // D76：備忘錄，唯讀
 const CloseSchema = z.object({ closed_at: z.string().min(10), fees_final_usd: z.number().min(0), value_final_usd: z.number().min(0) })
 export function registerApi(app: FastifyInstance, db: Database.Database) {
   app.get('/api/dates', async () => getDates(db))
@@ -60,6 +63,12 @@ export function registerApi(app: FastifyInstance, db: Database.Database) {
   app.put('/api/watchlist', async (req, reply) => {
     const p = z.object({ symbols: z.array(z.string().min(1).max(10)).max(200) }).safeParse(req.body); if (!p.success) return reply.code(400).send({ error: p.error.flatten() })
     const symbols = [...new Set(p.data.symbols.map(s => s.trim().toUpperCase()).filter(Boolean))]; setMeta(db, 'watchlist', JSON.stringify(symbols)); return { symbols }
+  })
+  // 備忘錄（D76）：只讀 notes/*.md，清單與單篇共用 resolveNote 驗證
+  app.get('/api/notes', async () => listNotes(NOTES_DIR))
+  app.get<{ Params: { name: string } }>('/api/notes/:name', async (req, reply) => {
+    const t = readNote(NOTES_DIR, req.params.name); if (t === null) return reply.code(404).send({ error: 'note not found' })
+    reply.type('text/plain; charset=utf-8'); return t
   })
   app.get('/api/scan-runs', async () => db.prepare('SELECT id, started_at, finished_at, ok, pools_scanned, api_calls, substr(error,1,200) error FROM scan_runs ORDER BY id DESC LIMIT 14').all())
 }

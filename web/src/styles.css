@@ -127,3 +127,55 @@ table.grid th[title] { cursor: help }
 /* D62：損益拆解的子列（手續費去向） */
 .pnl tr.sub td { font-size: 0.92em; color: #9aa3ad; padding-top: 2px; padding-bottom: 2px }
 .pnl tr.sub td.l { padding-left: 1.6em }
+/* 備忘錄（D76）：左清單右內容，窄螢幕改上下；長地址可換行，表格與程式碼區塊各自橫捲，不撐破頁面 */
+.notes { display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: 14px; align-items: start; max-width: 1200px }
+.notes-list { display: flex; flex-direction: column; gap: 4px; position: sticky; top: 68px }
+.notes-list h2 { margin: 4px 0 6px }
+.notes-list a { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 4px; color: var(--fg-2); background: var(--bg-2); overflow-wrap: anywhere }
+.notes-list a.active { color: var(--fg); border-color: var(--amber-2); background: rgba(242,177,53,.06) }
+.notes-list a small { color: var(--fg-3); font-size: 13px }
+.md { min-width: 0; line-height: 1.7; overflow-wrap: anywhere; font-size: 17px }
+.md .md-h { color: var(--fg); text-transform: none; letter-spacing: 0; font-weight: 600 }
+.md .md-h1 { font-size: 24px; margin: 4px 0 12px; color: var(--amber) }
+.md .md-h2 { font-size: 20px; margin: 22px 0 8px; border-bottom: 1px solid var(--line); padding-bottom: 4px }
+.md .md-h3 { font-size: 17px; margin: 16px 0 6px; color: var(--fg-2) }
+.md p { margin: 8px 0 }
+.md ul, .md ol { margin: 6px 0; padding-left: 24px }
+.md li { margin: 3px 0 }
+.md blockquote { margin: 8px 0; padding: 4px 12px; border-left: 3px solid var(--amber); background: rgba(242,177,53,.06); border-radius: 4px }
+.md hr { border: 0; border-top: 1px solid var(--line); margin: 16px 0 }
+.md code.icode { font-family: var(--mono); font-size: 15px; background: var(--bg-3); border: 1px solid var(--line-2); border-radius: 3px; padding: 0 4px; overflow-wrap: anywhere; word-break: break-all }
+.md .icode-wrap { display: inline; }
+.md .md-code { position: relative; margin: 8px 0 }
+.md .md-code pre { margin: 0; background: var(--bg); border: 1px solid var(--line-2); border-radius: 4px; padding: 10px 12px; overflow-x: auto; font-family: var(--mono); font-size: 15px }
+.md .md-code .copy { position: absolute; top: 6px; right: 6px }
+.md .md-table { overflow-x: auto; margin: 8px 0; max-width: 100% }
+.md .md-table table { border-collapse: collapse; width: 100%; font-size: 16px }
+.md .md-table th, .md .md-table td { border: 1px solid var(--line); padding: 6px 8px; vertical-align: top }
+.md .md-table th { background: var(--bg-3); color: var(--fg-2); font-weight: 500; white-space: nowrap }
+button.copy { margin-left: 6px; font: inherit; font-size: 13px; padding: 0 7px; line-height: 22px; border-radius: 3px; border: 1px solid var(--line-2); background: var(--bg-3); color: var(--fg-2); cursor: pointer; vertical-align: middle; white-space: nowrap }
+button.copy.ok { color: var(--green); border-color: rgba(79,209,139,.5) }
+button.copy.fail { color: var(--red); border-color: rgba(240,98,93,.5) }
+@media (max-width: 900px) {
+  .notes { grid-template-columns: minmax(0, 1fr) }
+  .notes-list { position: static; flex-direction: row; flex-wrap: wrap }
+  .notes-list h2 { width: 100% }
+  .notes-list a { flex: 1 1 200px }
+  .md { font-size: 16px }
+  .md .md-table th, .md .md-table td { padding: 5px 6px }
+}
+/* D76：導覽多了「備忘錄」，窄螢幕（直式 + 200% 縮放約 540px）時標題列維持單行：不換行、縮小品牌字、隱藏版本時間只留寬度 */
+header.top .brand, header.top nav a, header.top .right { white-space: nowrap }
+header.top nav { white-space: nowrap }
+@media (max-width: 640px) {
+  header.top { gap: 8px }
+  header.top .brand { font-size: 15px; letter-spacing: .05em }
+  header.top nav a { margin-right: 10px }
+  header.top .right .build { display: none }
+}
+@media (max-width: 420px) {
+  header.top .brand-rest { display: none }
+  header.top nav a { margin-right: 8px; font-size: 16px }
+}
+/* 表格第一欄（欄位名、代幣代號）不斷字；其他欄可任意斷，窄螢幕仍放得下；真的太窄由 .md-table 自己橫捲 */
+.md .md-table td:first-child { white-space: nowrap }
