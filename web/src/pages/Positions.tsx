@@ -1,8 +1,35 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis, Legend, ReferenceLine } from 'recharts'
 import { api, fmtNum, fmtUsd } from '../api'
 import WeeklyFees from '../components/WeeklyFees'
+import { Seg } from '../components/bits'
+import { POS_VIEWS, POS_VIEW_KEY, parseView, filterPositions, countByView, journalPreview, type PosView } from '../lib/positionsView'
+
+const KINDS: [string, string][] = [['open', '開倉理由'], ['note', '筆記'], ['adjust', '調整'], ['collect', '領手續費'], ['close', '關倉'], ['review', '檢討']]
+const readView = (): PosView => { try { return parseView(localStorage.getItem(POS_VIEW_KEY)) } catch { return 'open' } }
+const saveView = (v: PosView) => { try { localStorage.setItem(POS_VIEW_KEY, v) } catch { /* 私密視窗或封鎖儲存時只記在這次瀏覽 */ } }
+
+/** D77：日誌收合。收合時只顯示最新一則、文字截成三行；有藏起來的則數或文字真的被截斷（實際量測，不用字數猜）才出現展開鍵 */
+function JournalList({ journal, expanded, onToggle }: { journal: any[] | undefined; expanded: boolean; onToggle: () => void }) {
+  const { shown, hidden } = journalPreview(journal, expanded)
+  const clampRef = useRef<HTMLSpanElement>(null); const [clamped, setClamped] = useState(false)
+  useLayoutEffect(() => {
+    const el = clampRef.current; if (!el || expanded) { setClamped(false); return }
+    const measure = () => setClamped(el.scrollHeight > el.clientHeight + 1)
+    measure()
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(measure) : null; ro?.observe(el)
+    return () => ro?.disconnect()
+  }, [expanded, shown[0]?.id, shown[0]?.text])
+  const total = journal?.length ?? 0
+  return <>
+    {shown.map((j: any) => <div key={j.id} style={{ fontSize: 12, marginBottom: 6 }}><span className="chip">{KINDS.find(k => k[0] === j.kind)?.[1] ?? j.kind}</span><span className="muted num" style={{ fontSize: 13, marginRight: 6 }}>{j.ts.slice(0, 16).replace('T', ' ')}</span>
+      <span ref={expanded ? undefined : clampRef} className={expanded ? undefined : 'clamp3'}>{j.text}</span>
+      {j.data?.images?.length > 0 && <div style={{ display: 'flex', gap: 6, marginTop: 4, flexWrap: 'wrap' }}>{j.data.images.map((im: string) => <a key={im} href={`/api/journal-image/${im}`} target="_blank" rel="noreferrer"><img src={`/api/journal-image/${im}`} style={{ height: 90, borderRadius: 4, border: '1px solid var(--line-2)' }} /></a>)}</div>}
+    </div>)}
+    {(expanded || hidden > 0 || clamped) && <button className="ghost linkish" onClick={onToggle}>{expanded ? '收起' : hidden > 0 ? `展開全部 ${total} 則` : '展開全文'}</button>}
+  </>
+}
 export default function Positions() {
   const [list, setList] = useState<any[]>([]); const [err, setErr] = useState('')
   const [f, setF] = useState({ pool_id: '', label: '', range_lower: '', range_upper: '', deposit_usd: '', opened_at: new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16), notes: '' })
@@ -30,7 +57,9 @@ export default function Positions() {
     const text = (jText[id] ?? '').trim(); const images = jImgs[id] ?? []; if (!text && !images.length) return
     try { await api(`/api/positions/${id}/journal`, { method: 'POST', body: JSON.stringify({ kind: jKind[id] ?? 'note', text, images }) }); setJText({ ...jText, [id]: '' }); setJImgs({ ...jImgs, [id]: [] }); load() } catch (e) { setErr(String(e)) }
   }
-  const KINDS: [string, string][] = [['open', '開倉理由'], ['note', '筆記'], ['adjust', '調整'], ['collect', '領手續費'], ['close', '關倉'], ['review', '檢討']]
+  const [view, setView] = useState<PosView>(readView); const [open, setOpen] = useState<Record<number, boolean>>({})
+  const pickView = (v: string) => { const pv = parseView(v); setView(pv); saveView(pv) }
+  const counts = countByView(list); const shown = filterPositions(list, view)
   const tsFmt = (t: number) => new Date(t * 1000).toISOString().slice(5, 16).replace('T', ' ')
   return <>
     <WeeklyFees reloadToken={list} />
@@ -46,9 +75,11 @@ export default function Positions() {
       <button className="primary" type="submit">登錄</button>
     </form>
     {err && <p className="neg">{err}</p>}
-    <h2>頭寸（{list.length}）</h2>
-    <div className="cards two">
-      {list.map(p => <div className="card" key={p.id}>
+    <div className="pos-head"><h2>頭寸（{shown.length} / {list.length}）</h2>
+      <Seg value={view} options={POS_VIEWS.map(([v, l]) => [v, `${l} ${counts[v]}`] as [string, string])} onChange={pickView} /></div>
+    {list.length > 0 && shown.length === 0 && <p className="muted">{view === 'closed' ? '沒有已關閉的頭寸。' : '目前沒有持有中的頭寸。'}</p>}
+    <div className="pos-cards">
+      {shown.map(p => <div className="card" key={p.id}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
           <b>{p.label}</b>{p.notes_json?.source === 'onchain' && <span className="chip" style={{ marginLeft: 6 }}>鏈上</span>}<Link to={`/pool/${p.pool_id}`}>{p.symbol}/USDG {(p.fee_ppm / 1e4).toFixed(2)}%</Link>
         </div>
@@ -93,9 +124,7 @@ export default function Positions() {
           </> : <p className="muted">此池尚無小時資料，無法估算。</p>}
         <div style={{ marginTop: 10, borderTop: '1px solid var(--line)', paddingTop: 8 }}>
           <div className="muted" style={{ fontSize: 14, marginBottom: 4 }}>日誌（自動匯出到 data/positions/）</div>
-          {(p.journal ?? []).map((j: any) => <div key={j.id} style={{ fontSize: 12, marginBottom: 6 }}><span className="chip">{KINDS.find(k => k[0] === j.kind)?.[1] ?? j.kind}</span><span className="muted num" style={{ fontSize: 13, marginRight: 6 }}>{j.ts.slice(0, 16).replace('T', ' ')}</span>{j.text}
-            {j.data?.images?.length > 0 && <div style={{ display: 'flex', gap: 6, marginTop: 4, flexWrap: 'wrap' }}>{j.data.images.map((im: string) => <a key={im} href={`/api/journal-image/${im}`} target="_blank" rel="noreferrer"><img src={`/api/journal-image/${im}`} style={{ height: 90, borderRadius: 4, border: '1px solid var(--line-2)' }} /></a>)}</div>}
-          </div>)}
+          <JournalList journal={p.journal} expanded={!!open[p.id]} onToggle={() => setOpen(o => ({ ...o, [p.id]: !o[p.id] }))} />
           <div className="journal-row">
             <select value={jKind[p.id] ?? 'note'} onChange={e => setJKind({ ...jKind, [p.id]: e.target.value })}>{KINDS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select>
             <input placeholder="打字，或直接 Ctrl+V 貼截圖…" value={jText[p.id] ?? ''} onChange={e => setJText({ ...jText, [p.id]: e.target.value })} onKeyDown={e => e.key === 'Enter' && addNote(p.id)} onPaste={e => onPaste(p.id, e)} />
