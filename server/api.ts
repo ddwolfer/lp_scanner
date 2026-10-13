@@ -27,7 +27,7 @@ export function registerApi(app: FastifyInstance, db: Database.Database) {
     const r = getPool(db, req.params.id.toLowerCase()); if (!r) return reply.code(404).send({ error: 'pool not found' }); return r
   })
   app.get('/api/positions', async () => listPositions(db))
-  app.get('/api/fees/weekly', async () => weeklyFees(listPositions(db).map(p => ({ id: p.id, label: p.label, depositUsd: p.deposit_usd, dailyFees: p.dailyFees }))))   // D68
+  app.get('/api/fees/weekly', async () => weeklyFees(listPositions(db).map(p => ({ id: p.id, label: p.label, depositUsd: p.deposit_usd, dailyFees: p.dailyFees, symbol: p.symbol, closed: !!p.closed_at }))))   // D68
   app.post('/api/positions', async (req, reply) => {
     const p = PositionSchema.safeParse(req.body); if (!p.success) return reply.code(400).send({ error: p.error.flatten() })
     return { id: createPosition(db, p.data) }

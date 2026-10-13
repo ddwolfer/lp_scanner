@@ -1,13 +1,14 @@
 // D68：每週手續費。長條圖看週與週的變化，點一週看逐日與各頭寸
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type ReactElement } from 'react'
 import { Bar, BarChart, CartesianGrid, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { api, fmtUsd } from '../api'
+import { groupWeekRows, type WPos, type Row } from '../lib/weeklyRows'
 type WeekDay = { usDay: string; weekday: string; total: number; byPos: { id: number; label: string; usd: number }[] }
-type Week = { weekStart: string; days: WeekDay[]; weekend: number; total: number; capital: number; byPos: { id: number; label: string; usd: number }[] }
+type Week = { weekStart: string; days: WeekDay[]; weekend: number; total: number; capital: number; byPos: WPos[]; tradingDays: number; openSymbols: string[] }
 const md = (ymd: string) => { const [, m, d] = ymd.split('-'); return `${+m}/${+d}` }
 const pct = (usd: number, cap: number) => cap > 0 ? (usd / cap * 100).toFixed(2) + '%' : '—'
 export default function WeeklyFees({ reloadToken }: { reloadToken?: unknown }) {   // reloadToken：父頁重新載入頭寸時一併重抓（關倉、登錄後，Codex review）
-  const [weeks, setWeeks] = useState<Week[]>([]); const [sel, setSel] = useState(0)
+  const [weeks, setWeeks] = useState<Week[]>([]); const [sel, setSel] = useState(0); const [openRows, setOpenRows] = useState<Record<string, boolean>>({})
   useEffect(() => { api<Week[]>('/api/fees/weekly').then(ws => { setWeeks(ws); setSel(i => Math.min(i, Math.max(0, ws.length - 1))) }).catch(() => setWeeks([])) }, [reloadToken])
   if (!weeks.length) return null
   const w = weeks[sel]
@@ -16,8 +17,15 @@ export default function WeeklyFees({ reloadToken }: { reloadToken?: unknown }) {
   const prev = weeks.find(x => x.weekStart === prevStart)
   const chart = weeks.slice(0, 10).map((x, i) => ({ i, label: md(x.weekStart), total: Number(x.total.toFixed(2)) })).reverse()
   const tradingAvg = w.days.length ? w.days.reduce((a, d) => a + d.total, 0) / w.days.length : 0
-  const prevBy = new Map((prev?.byPos ?? []).map(x => [x.id, x.usd]))
   const delta = (v: number) => <span className={v >= 0 ? 'pos' : 'neg'}>{v >= 0 ? '+' : '−'}{fmtUsd(Math.abs(v), 2)}</span>
+  // D78：頭寸表依幣種合併、改比每交易日貢獻；沒有前一週或沒有交易日時顯示「—」
+  const { rows, curAvg, prevAvg } = groupWeekRows(w, prev)
+  const money = (v: number | null) => v === null ? <span className="muted">—</span> : fmtUsd(v, 2)
+  const rowEl = (r: Row, sub = false): ReactElement[] => { const canOpen = r.children.length > 0; const isOpen = !!openRows[r.key]
+    return [<tr key={r.key} className={(sub ? 'sub ' : '') + (canOpen ? 'clicky' : '')} onClick={canOpen ? () => setOpenRows(o => ({ ...o, [r.key]: !o[r.key] })) : undefined}>
+      <td className="l">{canOpen && <span className="muted">{isOpen ? '▾ ' : '▸ '}</span>}<span className={r.closed ? 'muted' : ''}>{r.label}</span>{sub && r.closed && <span className="chip" style={{ marginLeft: 6 }}>已關閉</span>}{r.gappy && <span className="muted" title="這段期間有快照間隔超過 30 小時（例如掃描中斷），補抓的手續費算在恢復那天"> ≈</span>}</td>
+      <td className="num">{money(r.cur)}</td><td className="num muted">{money(r.prev)}</td><td className="num">{r.delta === null ? <span className="muted">—</span> : delta(r.delta)}</td><td className="num muted">{money(r.perK)}</td></tr>,
+      ...(canOpen && isOpen ? r.children.flatMap(c => rowEl(c, true)) : [])] }
   return <>
     <h2>每週手續費</h2>
     <div className="card">
@@ -35,22 +43,21 @@ export default function WeeklyFees({ reloadToken }: { reloadToken?: unknown }) {
       </ResponsiveContainer>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 18px', alignItems: 'baseline', margin: '8px 0' }}>
         <b style={{ fontSize: 18 }}>{md(w.weekStart)} 那週 {fmtUsd(w.total, 2)}</b>
-        {prev && <span className="muted">比前一週 {delta(w.total - prev.total)}</span>}
         <span className="muted">交易日平均 {fmtUsd(tradingAvg, 2)}/日（投入 {fmtUsd(w.capital)} 的 {pct(tradingAvg, w.capital)}）</span>
+        {curAvg !== null && prevAvg !== null && <span className="muted">前一週 {fmtUsd(prevAvg, 2)}/日 → {delta(curAvg - prevAvg)}/日</span>}
       </div>
-      <div className="cards" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))' }}>
+      <div className="cards" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(min(300px, 100%), 1fr))' }}>
         <table className="grid"><thead><tr><th className="l">日期</th><th className="l">星期</th><th>合計</th><th>佔投入</th></tr></thead><tbody>
           {w.days.map(d => <tr key={d.usDay} title={[...d.byPos].sort((a, b) => b.usd - a.usd).map(x => `${x.label} ${fmtUsd(x.usd, 2)}`).join('\n')}>
             <td className="l num">{md(d.usDay)}</td><td className="l">週{d.weekday}</td><td className="num">{fmtUsd(d.total, 2)}</td><td className="num muted">{pct(d.total, w.capital)}</td></tr>)}
           {w.weekend !== 0 && <tr><td className="l muted" colSpan={2}>週末</td><td className="num muted">{fmtUsd(w.weekend, 2)}</td><td></td></tr>}
           <tr><td className="l" colSpan={2}><b>一週</b></td><td className="num"><b>{fmtUsd(w.total, 2)}</b></td><td></td></tr>
         </tbody></table>
-        <table className="grid"><thead><tr><th className="l">頭寸</th><th>這週</th><th>前一週</th><th>變化</th></tr></thead><tbody>
-          {[...w.byPos, ...(prev?.byPos ?? []).filter(x => !w.byPos.some(y => y.id === x.id)).map(x => ({ ...x, usd: 0 }))].map(p => { const pv = prevBy.get(p.id); return <tr key={p.id}>   {/* 前一週有、這週沒有的頭寸（例如已關閉）也列出來，這週記 0（Codex review） */}
-            <td className="l">{p.label}</td><td className="num">{fmtUsd(p.usd, 2)}</td><td className="num muted">{pv === undefined ? '—' : fmtUsd(pv, 2)}</td><td className="num">{pv === undefined ? '' : delta(p.usd - pv)}</td></tr> })}
-        </tbody></table>
+        <div className="tscroll"><table className="grid wk-pos"><thead><tr><th className="l">頭寸</th><th title="交易日手續費 ÷ 這週交易日數；各列加起來等於上方的交易日平均">這週/日</th><th>前一週/日</th><th>變化</th><th title="這週每投入 $1,000 每天賺多少（用本金 × 持有時數換算，新開倉不會被低估）">每千元</th></tr></thead><tbody>
+          {rows.flatMap(r => rowEl(r))}
+        </tbody></table></div>
       </div>
-      <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>日期是美股交易日；每天的切點是台北 06:00 的頭寸快照（9/26 前是 07:30 掃描後）。頭寸第一筆快照含開倉以來的累積，所以開倉那週的第一天可能偏高。滑到某一天可看各頭寸明細。</div>
+      <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>日期是美股交易日；每天的切點是台北 06:00 的頭寸快照（9/26 前是 07:30 掃描後）。頭寸第一筆快照含開倉以來的累積，所以開倉那週的第一天可能偏高。滑到某一天可看各頭寸明細。右表只算美股交易日：同幣種合併成一列（點開看各頭寸），已沒有持有中頭寸的幣種歸到「已關閉合計」；≈ 表示有跨日補抓的快照。</div>
     </div>
   </>
 }
