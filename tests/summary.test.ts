@@ -109,3 +109,27 @@ it('D75：頭寸日報格式（補跑註記、Σ 前空行、合計與錢包行�
   const t = formatPositionsOnly({ date: '2026-10-11', weekdayZh: '日', positions: ['META #1 (3d)  昨日費 +$1.00  ⚖️ 留', 'Σ 昨日費 +$1.00', '年化 手續費 40%', '錢包 $1 vs OKX 淨入金 $1 → +$0'], note: '（08:00 補跑）', dashboardUrl: 'http://x' })
   expect(t).toBe('📊 LP 頭寸日報 2026-10-11 (日)\n（08:00 補跑）\n\n💼 我的頭寸\n- META #1 (3d)  昨日費 +$1.00  ⚖️ 留\n\nΣ 昨日費 +$1.00\n年化 手續費 40%\n錢包 $1 vs OKX 淨入金 $1 → +$0\n\n📈 http://x')
 })
+
+import { formatReinvest } from '../scanner/run.js'
+it('formatReinvest：只列在區間、未領費 ≥ $100、離上下緣 ≥ 5% 的頭寸，金額大到小；沒有達標回 null（D79）', () => {
+  const cfg = { min_fees_usd: 100, min_edge_pct: 0.05 }
+  const mk = (label: string, fees: number, lo: number, hi: number, price: number | null, extra: any = {}) => ({ symbol: label.split(' ')[0], label, closed_at: null, range_lower: lo, range_upper: hi,
+    actual: { fees_cum_usd: fees, in_range: price !== null ? price >= lo && price <= hi : true, price_usd: price }, ...extra })
+  const rows = [
+    mk('TSLA #4695', 101.2, 352, 414, 385),          // 上緣 +7.5%、下緣 −8.6% → 列
+    mk('CRCL v3 #3911', 104.4, 68, 105, 76),         // 列，金額較大排前面
+    mk('MSTR #7480', 63, 115, 175, 143),             // 未滿 $100
+    mk('META #4666', 150, 689, 801, 632),            // 出區間
+    mk('SPY #1', 120, 700, 800, 770),                // 離上緣 3.9% → 不列
+    mk('GOOGL #1', 130, 300, 400, null),             // 沒有快照價格 → 不列
+    mk('AMD #1', 200, 100, 200, 150, { closed_at: '2026-10-01' }),   // 已關閉
+    { symbol: 'SOFI', label: '#1', closed_at: null, actual: null },   // 手動頭寸
+  ] as any
+  expect(formatReinvest(rows, cfg)).toBe('再投入：CRCL v3 #3911 $104 · TSLA #4695 $101')
+  expect(formatReinvest(rows.slice(2), cfg)).toBeNull()
+  expect(formatReinvest([mk('#9', 100, 90, 130, 110)].map(r => ({ ...r, symbol: 'TSM' })) as any, cfg)).toBe('再投入：TSM #9 $100')   // 剛好 $100 列；label 不含 symbol 時補上
+  const line = formatReinvest(rows, cfg)!
+  expect(formatDailySummary({ date: 'd', weekdayZh: '一', poolsScanned: 1, candidates: 0, sortKey: 'd1000.r25', top: [], changes: [], positions: ['TSLA #4695 (27d)  昨日費 +$3.00', line] })).toContain('\n再投入：CRCL')
+  const t = formatPositionsOnly({ date: 'd', weekdayZh: '一', positions: ['TSLA #4695 (27d)  昨日費 +$3.00', line] })
+  expect(t).toContain('\n再投入：CRCL'); expect(t).not.toContain('- 再投入'); expect(t).toContain('- TSLA #4695')
+})

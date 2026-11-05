@@ -41,5 +41,9 @@
     "gas_usd_per_tx": 0.05,
     "lifecycle_txs": 4,
     "capacity_share": 0.1
+  },
+  "reinvest_hint": {
+    "min_fees_usd": 100,
+    "min_edge_pct": 0.05
   }
 }

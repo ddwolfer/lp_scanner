@@ -189,7 +189,7 @@ export function listPositions(db: Database.Database) {
     const effReinvestTs = (e: { ts: string; reinvestTs?: string }) => Math.max(Date.parse(e.ts), Date.parse(e.reinvestTs ?? e.ts))   // 再投入不可能早於領取；日誌時間誤填時以領取時間為準（Codex review）
     const withdrawnBy = (iso: string) => events.reduce((a, e) => a + (Date.parse(e.ts) <= Date.parse(iso) ? e.usd : 0) - (e.reinvested > 0 && effReinvestTs(e) <= Date.parse(iso) ? e.reinvested : 0), 0)   // 領出在領取時生效、再投入在存回時扣
     const snapIso = (sn: any) => sn.taken_at ?? (sn.date + 'T23:59:59+08:00')
-    const actual = latest && notes?.source === 'onchain' ? { date: latest.date, value_usd: latest.value_usd, fees_cum_usd: latest.fees_cum_usd, in_range: !!latest.in_range,
+    const actual = latest && notes?.source === 'onchain' ? { date: latest.date, value_usd: latest.value_usd, fees_cum_usd: latest.fees_cum_usd, in_range: !!latest.in_range, price_usd: (latest.price_usd ?? null) as number | null,
       net_usd: latest.value_usd + latest.fees_cum_usd + withdrawnBy(snapIso(latest)) - capitalAt(snapIso(latest)), fees_withdrawn_usd: withdrawnBy(snapIso(latest)), fees_reinvested_usd: reinvestedBy(snapIso(latest)), capital_usd: capitalAt(snapIso(latest)), days: Math.max(1, Math.round((Date.parse(latest.date) - Date.parse(r.opened_at.slice(0, 10))) / 86400000) + 1), deposit_estimated: !!notes.deposit_estimated } : null
     // 每日「實際 vs 模擬」：模擬取該日最後一小時的累積值
     // D62：模擬承接同一部位、在加倉時點加流動性（不重新建倉）；實際淨損益對「當時的投入」算，領出的費加回

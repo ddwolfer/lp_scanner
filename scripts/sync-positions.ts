@@ -17,12 +17,12 @@ const live = new Map(vals.map(v => [v.positionId, v]))   // D69：印這次同�
 for (const p0 of listPositions(db)) if (!p0.closed_at) { const v = live.get(p0.id); const p = v && p0.actual ? { ...p0, actual: { ...p0.actual, value_usd: v.valueUsd, fees_cum_usd: v.feesUsd, in_range: v.inRange, net_usd: v.valueUsd + v.feesUsd + p0.liveBasis.withdrawn_usd - p0.liveBasis.capital_usd } } : p0; console.log(`${p.label}  區間 ${p.range_lower.toFixed(2)}–${p.range_upper.toFixed(2)}  投入 $${p.deposit_usd.toFixed(2)}  現值 $${p.actual?.value_usd.toFixed(2)}  未領費 $${p.actual?.fees_cum_usd.toFixed(2)}  淨 ${p.actual ? (p.actual.net_usd >= 0 ? '+' : '') + p.actual.net_usd.toFixed(2) : '—'}  ${p.actual?.in_range ? '在區間' : '出區間'}`) }
 { const { walletLine } = await import('../scanner/run.js'); const wl = walletLine(db, taipeiDate(now)); if (wl) console.log(wl) }
 if (daily) {
-  const { formatPositions, formatFeesTotal, formatApr, walletLine } = await import('../scanner/run.js')
+  const { formatPositions, formatFeesTotal, formatApr, walletLine, formatReinvest } = await import('../scanner/run.js')
   const { formatPositionsOnly } = await import('../scanner/notify/summary.js'); const { sendTelegram } = await import('../scanner/notify/telegram.js')
   // 星期用日期本身算（getUTCDay），不受主機時區影響（Codex review）
-  const l = listPositions(db); const t = formatFeesTotal(l), a = formatApr(l), w = walletLine(db, today)
+  const l = listPositions(db); const t = formatFeesTotal(l), a = formatApr(l), w = walletLine(db, today), ri = formatReinvest(l)
   const hr = Number(new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Taipei', hour: 'numeric', hourCycle: 'h23' }).format(now))
-  const text = formatPositionsOnly({ date: today, weekdayZh: ['日', '一', '二', '三', '四', '五', '六'][new Date(today + 'T12:00:00Z').getUTCDay()], positions: [...formatPositions(l), ...(t ? [t] : []), ...(a ? [a] : []), ...(w ? [w] : [])],
+  const text = formatPositionsOnly({ date: today, weekdayZh: ['日', '一', '二', '三', '四', '五', '六'][new Date(today + 'T12:00:00Z').getUTCDay()], positions: [...formatPositions(l), ...(t ? [t] : []), ...(a ? [a] : []), ...(w ? [w] : []), ...(ri ? [ri] : [])],
     note: hr >= 7 ? `（${String(hr).padStart(2, '0')}:00 補跑：06:00 那次沒成功，昨日費的時數見括號）` : undefined, dashboardUrl: process.env.DASHBOARD_URL })
   const sent = await sendTelegram(text, { token: process.env.TELEGRAM_BOT_TOKEN, chatId: process.env.TELEGRAM_CHAT_ID, topicId: process.env.TELEGRAM_TOPIC_ID })
   console.log('telegram', sent); if (sent === 'sent') setMeta(db, 'daily_positions_done', today)   // 送出才算完成，否則下一次排程再試
